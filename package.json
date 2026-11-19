@@ -1,0 +1,9 @@
+{
+  "name": "inventario",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Inventario, horas y comisiones para un negocio local.",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
