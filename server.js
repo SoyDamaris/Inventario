@@ -10,6 +10,46 @@ const PUBLIC = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
 const DB_PATH = path.join(DATA_DIR, 'db.json');
 const CURRENCIES = new Set(['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP']);
+const PATCH_EXTRA = 2;
+const SECTION_DEFS = [
+  {
+    id: 'reparacion',
+    name: 'Reparación',
+    kind: 'rims',
+    rims: ['14', '15', '16', '17', '18', '20'],
+    prices: { 14: 5, 15: 5, 16: 7, 17: 7, 18: 9, 20: 10 },
+    extras: [{ id: 'valvula', name: 'Válvula', price: 5 }],
+  },
+  {
+    id: 'balances',
+    name: 'Balances',
+    kind: 'rims',
+    rims: ['14', '15', '16', '17', '18', '20'],
+    prices: { 14: 4, 15: 4, 16: 5, 17: 5, 18: 5, 20: 5 },
+  },
+  {
+    id: 'rotacion',
+    name: 'Rotación',
+    kind: 'rims',
+    rims: ['14', '15', '16', '17', '18', '20'],
+    prices: { 14: 3, 15: 3, 16: 4, 17: 4, 18: 4, 20: 4 },
+  },
+  {
+    id: 'cambio',
+    name: 'Cambio de llantas',
+    kind: 'rims',
+    rims: ['14', '15', '16', '17', '18', '19', '20'],
+    prices: { 14: 3, 15: 3, 16: 4, 17: 4, 18: 4, 19: 5, 20: 5 },
+  },
+  {
+    id: 'lujo',
+    name: 'Rines de lujo',
+    kind: 'rims',
+    rims: ['14', '15', '16', '17', '18', '19', '20'],
+    prices: { 14: 7, 15: 7, 16: 10, 17: 10, 18: 10, 19: 10, 20: 10 },
+  },
+  { id: 'venta_llanta', name: 'Venta de llanta', kind: 'list' },
+];
 
 const sessions = new Map();
 const attempts = new Map();
@@ -254,10 +294,11 @@ function seed() {
   return {
     settings: {
       businessName: 'Mi negocio',
-      currency: 'COP',
+      currency: 'USD',
       demo: true,
       commissionRate: 30,
       services: defaultServices(),
+      catalog: blankCatalog(),
     },
     users: [gerente, ana, luis],
     products,
@@ -269,11 +310,29 @@ function seed() {
 }
 
 function ensure() {
-  db.settings ||= { businessName: 'Mi negocio', currency: 'COP', demo: false };
+  db.settings ||= { businessName: 'Mi negocio', currency: 'USD', demo: false };
   if (!Array.isArray(db.settings.services) || db.settings.services.length !== 4) {
     db.settings.services = defaultServices();
   }
+  const hadCatalog = Boolean(db.settings.catalog && Array.isArray(db.settings.catalog.sections));
+  const applyList = !hadCatalog || db.settings.catalog.priceList !== 1;
+  if (applyList) {
+    const previous = hadCatalog
+      ? (db.settings.catalog.sections.find((section) => section.id === 'venta_llanta')?.items || [])
+      : (db.settings.services || []).filter((item) => String(item.name || '').trim());
+    db.settings.catalog = blankCatalog();
+    const tires = db.settings.catalog.sections.find((section) => section.id === 'venta_llanta');
+    tires.items = previous.map((item, index) => ({
+      id: String(item.id || `llanta_${index + 1}`).replace(/[^a-z0-9_-]/gi, '').slice(0, 40) || `llanta_${index + 1}`,
+      name: cleanText(item.name, 80),
+      price: Number(item.price) > 0 ? Number(item.price) : 0,
+    })).filter((item) => item.name);
+    if (!hadCatalog) db.settings.currency = 'USD';
+  } else {
+    db.settings.catalog = normalizeCatalog(db.settings.catalog);
+  }
   db.settings.commissionRate = commissionRate();
+  if (applyList) persistSync();
   db.users ||= [];
   db.products ||= [];
   db.shifts ||= [];
@@ -319,6 +378,115 @@ function defaultServices() {
   return [1, 2, 3, 4].map((n) => ({ id: `srv_${n}`, name: '', price: 0 }));
 }
 
+function blankCatalog() {
+  return {
+    patchExtra: PATCH_EXTRA,
+    priceList: 1,
+    sections: SECTION_DEFS.map((def) => {
+      if (def.kind === 'rims') {
+        return {
+          id: def.id,
+          name: def.name,
+          kind: 'rims',
+          rims: def.rims.slice(),
+          prices: Object.fromEntries(def.rims.map((rim) => [rim, def.prices[rim]])),
+          extras: (def.extras || []).map((extra) => ({ ...extra })),
+        };
+      }
+      return { id: def.id, name: def.name, kind: 'list', items: [] };
+    }),
+  };
+}
+
+function normalizeCatalog(raw) {
+  const catalog = blankCatalog();
+  const previous = new Map(Array.isArray(raw?.sections) ? raw.sections.map((section) => [section.id, section]) : []);
+  catalog.sections = catalog.sections.map((section) => {
+    const current = previous.get(section.id);
+    if (!current) return section;
+    if (section.kind === 'rims') {
+      const prices = { ...section.prices };
+      section.rims.forEach((rim) => {
+        const value = Number(current.prices?.[rim]);
+        if (Number.isFinite(value) && value >= 0) prices[rim] = value;
+      });
+      const extras = section.extras.map((extra) => {
+        const saved = (current.extras || []).find((item) => item.id === extra.id);
+        const value = Number(saved?.price);
+        return { ...extra, price: Number.isFinite(value) && value >= 0 ? value : extra.price };
+      });
+      return { ...section, prices, extras };
+    }
+    if (section.kind === 'list') {
+      const items = Array.isArray(current.items) ? current.items : [];
+      return {
+        ...section,
+        items: items.map((item, index) => ({
+          id: String(item.id || `llanta_${index + 1}`).replace(/[^a-z0-9_-]/gi, '').slice(0, 40) || `llanta_${index + 1}`,
+          name: cleanText(item.name, 80),
+          price: Number(item.price) > 0 ? Number(item.price) : 0,
+        })).filter((item) => item.name).slice(0, 40),
+      };
+    }
+    return section;
+  });
+  return catalog;
+}
+
+function catalogFromBody(body) {
+  const incoming = new Map(Array.isArray(body?.sections) ? body.sections.map((section) => [section.id, section]) : []);
+  const seen = new Set();
+  return {
+    patchExtra: PATCH_EXTRA,
+    priceList: 1,
+    sections: SECTION_DEFS.map((def) => {
+      const current = incoming.get(def.id) || {};
+      if (def.kind === 'rims') {
+        const prices = {};
+        def.rims.forEach((rim) => {
+          const raw = current.prices ? current.prices[rim] : def.prices[rim];
+          prices[rim] = cleanNumber(raw || 0, { min: 0, max: 1000000000, label: `El precio del rin ${rim}` });
+        });
+        const extras = (def.extras || []).map((extra) => {
+          const saved = (current.extras || []).find((item) => item.id === extra.id) || {};
+          return {
+            id: extra.id,
+            name: extra.name,
+            price: cleanNumber(saved.price ?? extra.price, { min: 0, max: 1000000000, label: `El precio de ${extra.name}` }),
+          };
+        });
+        return {
+          id: def.id,
+          name: def.name,
+          kind: 'rims',
+          rims: def.rims.slice(),
+          prices,
+          extras,
+        };
+      }
+      if (def.kind === 'list') {
+        const items = Array.isArray(current.items) ? current.items.slice(0, 40) : [];
+        return {
+          ...def,
+          items: items.map((item, index) => {
+            const name = cleanText(item?.name, 80);
+            if (!name) return null;
+            let id = String(item?.id || '').trim();
+            if (!/^[a-z0-9_-]{1,40}$/i.test(id) || seen.has(id)) id = `llanta_${index + 1}_${crypto.randomBytes(3).toString('hex')}`;
+            seen.add(id);
+            return {
+              id,
+              name,
+              price: cleanNumber(item?.price || 0, { min: 0, max: 1000000000, label: `El precio de ${name}` }),
+            };
+          }).filter(Boolean),
+        };
+      }
+      return { id: def.id, name: def.name, kind: def.kind };
+    }),
+  };
+}
+
 function commissionRate() {
   return 30;
 }
@@ -334,6 +502,7 @@ function payloadFor(user) {
       demo: Boolean(db.settings.demo),
       commissionRate: commissionRate(),
       services: db.settings.services,
+      catalog: db.settings.catalog,
     },
     products: db.products,
     employees: isManager ? employees : employees.filter((item) => item.id === user.id),
@@ -523,13 +692,7 @@ async function handleApi(req, res, pathname) {
       db.settings.currency = body.currency;
     }
     if ('demo' in body) db.settings.demo = Boolean(body.demo);
-    if (Array.isArray(body.services)) {
-      db.settings.services.forEach((service, index) => {
-        const item = body.services[index] || {};
-        service.name = cleanText(item.name, 60);
-        service.price = cleanNumber(item.price || 0, { min: 0, max: 1000000000, label: 'El precio' });
-      });
-    }
+    if (body.catalog) db.settings.catalog = catalogFromBody(body.catalog);
     await persist();
     return send(res, 200, payloadFor(user));
   }
@@ -712,18 +875,53 @@ async function handleApi(req, res, pathname) {
     if (employee.active === false) throw httpError(400, 'Ese empleado está inactivo.');
     const carModel = cleanText(body.carModel, 80);
     if (!carModel) throw httpError(400, 'Escribe el modelo del carro.');
-    const serviceId = String(body.serviceId || '');
+    const sectionId = String(body.sectionId || '');
     let serviceName = 'Otros';
     let catalogPrice = 0;
     let description = '';
-    if (serviceId === 'otros') {
+    let rim = '';
+    let extraPatches = 0;
+    if (sectionId === 'otros') {
       description = cleanText(body.description, 300);
       if (!description) throw httpError(400, 'Describe lo que se vendió.');
     } else {
-      const service = db.settings.services.find((item) => item.id === serviceId);
-      if (!service) throw httpError(400, 'Elige una de las opciones.');
-      serviceName = service.name || 'Opción sin nombre';
-      catalogPrice = Number(service.price) || 0;
+      const catalog = normalizeCatalog(db.settings.catalog);
+      const section = catalog.sections.find((item) => item.id === sectionId);
+      if (!section) throw httpError(400, 'Elige una sección.');
+      serviceName = section.name;
+      if (section.kind === 'rims') {
+        rim = String(body.rim || '');
+        const extraOption = (section.extras || []).find((item) => item.id === rim);
+        if (extraOption) {
+          catalogPrice = Number(extraOption.price) || 0;
+          serviceName = `${section.name} · ${extraOption.name}`;
+        } else if ((section.rims || []).includes(rim)) {
+          catalogPrice = Number(section.prices[rim]) || 0;
+          serviceName = `${section.name} · Rin ${rim}`;
+        } else {
+          throw httpError(400, 'Elige el rin.');
+        }
+        if (section.id === 'reparacion' && !extraOption) {
+          const rawPatches = String(body.extraPatches ?? '0').trim();
+          if (!/^\d+$/.test(rawPatches)) throw httpError(400, 'Los parches extra no son válidos.');
+          extraPatches = Number(rawPatches);
+          if (extraPatches > 30) throw httpError(400, 'Los parches extra no son válidos.');
+          catalogPrice = roundMoney(catalogPrice + extraPatches * PATCH_EXTRA);
+          if (extraPatches > 0) {
+            const label = `${extraPatches} parche${extraPatches === 1 ? '' : 's'} extra`;
+            serviceName = `${serviceName} · ${label}`;
+            description = label;
+          }
+        }
+      } else if (section.kind === 'single') {
+        catalogPrice = Number(section.price) || 0;
+      } else {
+        const item = section.items.find((entry) => entry.id === String(body.itemId || ''));
+        if (!item) throw httpError(400, 'Elige la llanta.');
+        catalogPrice = Number(item.price) || 0;
+        serviceName = `Venta de llanta · ${item.name}`;
+      }
+      if (!(catalogPrice > 0)) throw httpError(400, 'Esa opción todavía no tiene precio.');
     }
     const methods = new Set(['yape', 'efectivo', 'transferencia']);
     const payments = Array.isArray(body.payments) ? body.payments : [];
@@ -752,8 +950,10 @@ async function handleApi(req, res, pathname) {
       id: uid('ven'),
       employeeId: employee.id,
       employeeName: employee.name,
-      serviceId,
+      sectionId,
       serviceName,
+      rim,
+      extraPatches,
       description,
       carModel,
       payments: cleanPayments,

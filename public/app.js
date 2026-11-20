@@ -17,7 +17,8 @@ const state = {
   openEmployee: null,
   expandedId: null,
   modal: null,
-  saleDraft: { serviceId: '', description: '', carModel: '', methods: [], amounts: { yape: '', efectivo: '', transferencia: '' }, employeeId: '' },
+  saleDraft: { sectionId: '', rim: '', itemId: '', extraPatches: '0', description: '', carModel: '', methods: [], amounts: { yape: '', efectivo: '', transferencia: '' }, employeeId: '' },
+  catalogDraft: null,
   loginUser: '',
   loginError: '',
 };
@@ -168,7 +169,7 @@ function sumEmployee(emp, month) {
   const rate = Number(state.settings.commissionRate) || 30;
   const commission = roundMoney(salesTotal * rate / 100);
   const paid = roundMoney(payments.reduce((total, item) => total + Number(item.amount), 0));
-  const earned = roundMoney(hourPay + commission);
+  const earned = commission;
   return {
     hours, hourPay, salesTotal, commission, paid, earned,
     owed: roundMoney(earned - paid),
@@ -249,7 +250,7 @@ function productGroups(products) {
 function allowedViews() {
   return state.user.role === 'gerente'
     ? [['inicio', 'Inicio', 'home'], ['inventario', 'Inventario', 'box'], ['ventas', 'Registro de ventas', 'receipt'], ['equipo', 'Equipo y pagos', 'users'], ['cuentas', 'Cuentas', 'card']]
-    : [['inventario', 'Inventario', 'box'], ['ventas', 'Registro de ventas', 'receipt'], ['jornada', 'Mi jornada', 'clock'], ['comisiones', 'Mis comisiones', 'coin']];
+    : [['inventario', 'Inventario', 'box'], ['ventas', 'Registro de ventas', 'receipt'], ['comisiones', 'Mis comisiones', 'coin']];
 }
 
 function currentView() {
@@ -294,6 +295,7 @@ function apply(data) {
   state.sales = data.sales || [];
   state.payments = data.payments || [];
   state.movements = data.movements || [];
+  state.catalogDraft = null;
 }
 
 function resetSession() {
@@ -338,16 +340,16 @@ function loginView() {
   return `<section class="login">
     <div class="login-hero">
       <div>
-        <p class="kicker">Control del negocio</p>
+        <span class="logo-plate"><img class="logo logo-hero" src="/logo.png" alt="GO Services"></span>
+        <p class="kicker">GO Services</p>
         <h1>Inventario claro para la gerencia y el equipo.</h1>
-        <p>Tú ves lo que hay, lo que se acabó, las horas y la comisión. Tus empleados actualizan las existencias desde su propia entrada.</p>
+        <p>Tú ves lo que hay, lo que se acabó y la comisión. Tus empleados actualizan las existencias desde su propia entrada.</p>
         <ul class="points">
           <li>Productos con foto, descripción y estado: disponible, queda poco o agotado.</li>
           <li>Una pantalla de gerencia y otra de empleados.</li>
           <li>Cada empleado se lleva el 30% de lo que vendió ese día.</li>
         </ul>
       </div>
-      <div class="stack-art" aria-hidden="true"><div></div><div></div><div></div></div>
     </div>
     <div class="login-panel">
       <form class="login-card" data-action="login">
@@ -360,12 +362,6 @@ function loginView() {
         </label>
         ${state.loginError ? `<p class="form-error">${esc(state.loginError)}</p>` : ''}
         <button class="btn" type="submit">Entrar</button>
-        <div class="hint">
-          <strong>Para entrar la primera vez</strong>
-          <p>Gerencia: <b>gerente</b> / <b>gerente123</b></p>
-          <p>Empleados de ejemplo: <b>ana</b> / <b>ana123</b> y <b>luis</b> / <b>luis123</b></p>
-          <p>Luego cámbialas en Mi cuenta y crea las cuentas de tu equipo.</p>
-        </div>
       </form>
     </div>
   </section>`;
@@ -377,7 +373,7 @@ function shell() {
   )).join('');
   return `<div class="app">
     <aside class="sidebar">
-      <div class="brand"><span class="mark">${esc(initials(state.settings.businessName))}</span><span><strong>${esc(state.settings.businessName)}</strong><small>${state.user.role === 'gerente' ? 'Gerencia' : 'Empleado'}</small></span></div>
+      <div class="brand"><span class="logo-plate"><img class="logo" src="/logo.png" alt="GO Services"></span><span><strong>${esc(state.settings.businessName)}</strong><small>${state.user.role === 'gerente' ? 'Gerencia' : 'Empleado'}</small></span></div>
       <nav class="nav">${nav}</nav>
       <div class="sidefoot">
         <div><strong>${esc(state.user.name)}</strong><small>@${esc(state.user.username)}</small></div>
@@ -406,7 +402,6 @@ function content() {
   if (view === 'ventas') return salesRegister();
   if (view === 'equipo') return team();
   if (view === 'cuentas') return accounts();
-  if (view === 'jornada') return shiftsPage();
   return commissionsPage();
 }
 
@@ -435,11 +430,11 @@ function homeManager() {
       const life = sumEmployee(emp, 'all');
       return `<button class="person" type="button" data-action="open-and-go" data-id="${esc(emp.id)}">
         <span class="avatar" style="background:${tint(emp.name)}">${esc(initials(emp.name))}</span>
-        <span><strong>${esc(emp.name)}</strong><small>${hoursLabel(month.hours)} este mes · 30% del día · ${money(month.commission)}</small></span>
+        <span><strong>${esc(emp.name)}</strong><small>30% del día · ${money(month.commission)}</small></span>
         <em>${esc(owedText(life.owed))}</em>
       </button>`;
     }).join('')
-    : `<div class="empty">Todavía no hay empleados. Crea sus cuentas para ver horas, comisión y lo que falta por pagar.</div>`;
+    : `<div class="empty">Todavía no hay empleados. Crea sus cuentas para ver la comisión y lo que falta por pagar.</div>`;
   return `${demoBanner()}
     <p class="date">${esc(date)}</p>
     <div class="stats">
@@ -545,7 +540,6 @@ function employeeStrip() {
   const month = sumEmployee(state.user, state.month);
   const life = sumEmployee(state.user, 'all');
   return `<section class="strip">
-    <div><span>Horas este mes</span><strong>${hoursLabel(month.hours)}</strong></div>
     <div><span>Pago de este mes · 30%</span><strong>${money(month.commission)}</strong></div>
     <div><span>Por pagarte</span><strong>${money(Math.max(0, life.owed))}</strong></div>
   </section>`;
@@ -594,9 +588,9 @@ function monthSelect() {
 }
 
 function team() {
-  return `<p class="lead">Horas, ventas y comisión del periodo. El saldo por pagar junta todo lo que falta, también de meses anteriores.</p>
+  return `<p class="lead">Ventas y comisión del periodo. El saldo por pagar junta todo lo que falta, también de meses anteriores.</p>
     <div class="section-head"><h2>${esc(monthName(state.month))}</h2>${monthSelect()}</div>
-    ${state.employees.length ? state.employees.map(employeeCard).join('') : '<div class="empty">Crea un empleado en Cuentas para empezar a llevar sus horas y su comisión.</div>'}`;
+    ${state.employees.length ? state.employees.map(employeeCard).join('') : '<div class="empty">Crea un empleado en Cuentas para llevar su comisión.</div>'}`;
 }
 
 function employeeCard(emp) {
@@ -607,7 +601,7 @@ function employeeCard(emp) {
     <div class="team-head">
       <div>
         <h3>${esc(emp.name)} ${emp.active ? '' : '<span class="badge off">Inactivo</span>'}</h3>
-        <p>@${esc(emp.username)} · ${percentLabel(emp.commissionPercent)} de las ventas${emp.hourlyRate > 0 ? ` · ${money(emp.hourlyRate)} por hora` : ''}</p>
+        <p>@${esc(emp.username)} · ${percentLabel(emp.commissionPercent)} de las ventas</p>
       </div>
       <div>
         <span class="muted">Saldo</span>
@@ -615,10 +609,8 @@ function employeeCard(emp) {
       </div>
     </div>
     <div class="figures">
-      <div><span>Horas</span><strong>${hoursLabel(month.hours)}</strong></div>
       <div><span>Ventas</span><strong>${money(month.salesTotal)}</strong></div>
       <div><span>Comisión</span><strong>${money(month.commission)}</strong></div>
-      ${emp.hourlyRate > 0 ? `<div><span>Por horas</span><strong>${money(month.hourPay)}</strong></div>` : ''}
       <div><span>Pagado en el periodo</span><strong>${money(month.paid)}</strong></div>
     </div>
     <div class="inline-actions" style="margin-top:12px">
@@ -631,19 +623,9 @@ function employeeCard(emp) {
 }
 
 function employeeDetail(emp, month) {
-  const shifts = [...month.shifts].sort(byDateDesc);
   const sales = [...month.allSales].sort(byDateDesc);
   const payments = [...month.payments].sort(byDateDesc);
   return `<div class="detail">
-    <h3>Horas</h3>
-    <form class="hours-form" data-action="save-shift">
-      <input type="hidden" name="employeeId" value="${esc(emp.id)}">
-      <input type="date" name="date" value="${todayISO()}" required>
-      <input name="hours" inputmode="decimal" placeholder="Horas" required>
-      <input name="notes" maxlength="200" placeholder="Nota del turno">
-      <button class="btn small" type="submit">Agregar</button>
-    </form>
-    ${shifts.length ? `<ul class="lines">${shifts.map((shift) => `<li><span>${formatDate(shift.date)} · ${hoursLabel(shift.hours)} ${shift.notes ? `· ${esc(shift.notes)}` : ''}</span><button class="btn ghost small" type="button" data-action="delete-shift" data-id="${esc(shift.id)}">Quitar</button></li>`).join('')}</ul>` : '<p class="muted">Sin horas en este periodo.</p>'}
     <h3>Ventas y comisión</h3>
     ${sales.length ? `<ul class="lines">${sales.map((sale) => `<li class="${sale.voided ? 'void' : ''}"><span>${formatDate(sale.date)} · ${esc(sale.productName)} × ${qty(sale.quantity)} · ${percentLabel(sale.commissionPercent)}</span><span><strong>${money(sale.commissionAmount)}</strong> ${canVoid(sale) ? `<button class="btn ghost small" type="button" data-action="void-sale" data-id="${esc(sale.id)}">Anular</button>` : (sale.voided ? '<small>Anulada</small>' : '')}</span></li>`).join('')}</ul>` : '<p class="muted">Sin ventas en este periodo. Se registran en Registro de ventas.</p>'}
     <h3>Pagos</h3>
@@ -663,7 +645,7 @@ function canVoid(sale) {
 
 function accounts() {
   const rows = state.employees.map((emp) => `<article class="account">
-    <div><strong>${esc(emp.name)}</strong><p class="muted">@${esc(emp.username)} · ${percentLabel(emp.commissionPercent)} · ${emp.hourlyRate > 0 ? `${money(emp.hourlyRate)} por hora` : 'sin valor por hora'} ${emp.active ? '' : '· inactiva'}</p></div>
+    <div><strong>${esc(emp.name)}</strong><p class="muted">@${esc(emp.username)} · ${percentLabel(emp.commissionPercent)} ${emp.active ? '' : '· inactiva'}</p></div>
     <button class="btn ghost small" type="button" data-action="edit-employee" data-id="${esc(emp.id)}">Editar</button>
   </article>`).join('');
   return `${demoBanner()}
@@ -673,30 +655,13 @@ function accounts() {
         <label class="field"><span>Nombre</span><input name="businessName" maxlength="60" value="${esc(state.settings.businessName)}"></label>
         <label class="field"><span>Moneda</span><select name="currency">${['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP'].map((code) => `<option ${code === state.settings.currency ? 'selected' : ''}>${code}</option>`).join('')}</select></label>
       </div>
-      <div class="section-head"><h2>Opciones del registro de ventas</h2></div>
-      <p class="lead">Escribe aquí los cuatro servicios. El empleado los ve al registrar. Otros queda siempre al final y abre la ventana para describir lo vendido. El pago del día es el 30% de lo que esa persona vendió.</p>
-      ${(state.settings.services || []).map((service, index) => `<div class="split">
-        <label class="field"><span>Opción ${index + 1}</span><input name="serviceName${index}" maxlength="60" value="${esc(service.name || '')}" placeholder="Nombre del servicio"></label>
-        <label class="field"><span>Precio</span><input name="servicePrice${index}" inputmode="decimal" value="${service.price ? esc(service.price) : ''}" placeholder="0"></label>
-      </div>`).join('')}
+      <div class="section-head"><h2>Precios del registro de ventas</h2></div>
+      <p class="lead">Cada rim y cada llanta tienen su precio. En una reparación, cada parche extra suma ${money(catalog().patchExtra || 2)} al registrar, además del precio del rim.</p>
+      ${catalogPriceEditor()}
       <button class="btn" type="submit">Guardar negocio</button>
     </form>
     <div class="section-head"><h2>Empleados</h2><button class="btn" type="button" data-action="new-employee">Nuevo empleado</button></div>
     ${rows || '<div class="empty">Todavía no hay empleados.</div>'}`;
-}
-
-function shiftsPage() {
-  const month = sumEmployee(state.user, state.month);
-  const shifts = [...month.shifts].sort(byDateDesc);
-  return `<p class="lead">Anota tus horas. La gerencia las ve en su inicio y las usa si definieron un valor por hora.</p>
-    <div class="section-head"><h2>${hoursLabel(month.hours)}</h2>${monthSelect()}</div>
-    <form class="hours-form" data-action="save-shift">
-      <input type="date" name="date" value="${todayISO()}" required>
-      <input name="hours" inputmode="decimal" placeholder="Horas" required>
-      <input name="notes" maxlength="200" placeholder="Nota del turno">
-      <button class="btn" type="submit">Agregar</button>
-    </form>
-    ${shifts.length ? `<ul class="lines">${shifts.map((shift) => `<li><span>${formatDate(shift.date)} · ${hoursLabel(shift.hours)} ${shift.notes ? `· ${esc(shift.notes)}` : ''}</span><button class="btn ghost small" type="button" data-action="delete-shift" data-id="${esc(shift.id)}">Quitar</button></li>`).join('')}</ul>` : '<div class="empty">No hay horas en este periodo.</div>'}`;
 }
 
 function commissionsPage() {
@@ -716,13 +681,116 @@ function commissionsPage() {
 
 const METHOD_LABEL = { yape: 'Yape', efectivo: 'Efectivo', transferencia: 'Transferencia' };
 
-function serviceChoices() {
-  return (state.settings.services || []).map((service, index) => ({
-    id: service.id,
-    name: String(service.name || '').trim() || `Opción ${index + 1}`,
-    price: Number(service.price) || 0,
-    empty: !String(service.name || '').trim(),
-  }));
+function catalog() {
+  return state.catalogDraft || state.settings.catalog || { patchExtra: 2, sections: [] };
+}
+
+function priceLabel(price) {
+  return Number(price) > 0 ? money(price) : 'sin precio';
+}
+
+function patchCount(value) {
+  const text = String(value ?? '').trim();
+  if (text === '') return 0;
+  if (!/^\d+$/.test(text)) return null;
+  const count = Number(text);
+  return count <= 30 ? count : null;
+}
+
+function savedCatalog() {
+  return state.settings.catalog || { patchExtra: 2, sections: [] };
+}
+
+function quoteSelection(draft) {
+  const source = savedCatalog();
+  const patch = Number(source.patchExtra) || 2;
+  if (draft.sectionId === 'otros') return { title: 'Otros', base: 0, extra: 0, total: 0, patches: 0, patch };
+  const section = (source.sections || []).find((item) => item.id === draft.sectionId) || null;
+  if (!section) return { title: 'Servicio', base: 0, extra: 0, total: 0, patches: 0, patch };
+  if (section.kind === 'rims') {
+    const extraOption = (section.extras || []).find((item) => item.id === draft.rim);
+    if (extraOption) {
+      const base = Number(extraOption.price) || 0;
+      return { title: `${section.name} · ${extraOption.name}`, base, extra: 0, total: base, patches: 0, patch };
+    }
+    const base = Number(section.prices?.[draft.rim]) || 0;
+    const title = `${section.name} · Rin ${draft.rim}`;
+    if (section.id !== 'reparacion') return { title, base, extra: 0, total: base, patches: 0, patch };
+    const patches = patchCount(draft.extraPatches);
+    const extra = patches === null ? 0 : roundMoney(patches * patch);
+    return { title, base, extra, total: patches === null ? base : roundMoney(base + extra), patches, patch };
+  }
+  if (section.kind === 'single') {
+    const base = Number(section.price) || 0;
+    return { title: section.name, base, extra: 0, total: base, patches: 0, patch };
+  }
+  const item = (section.items || []).find((entry) => entry.id === draft.itemId);
+  const base = Number(item?.price) || 0;
+  return { title: item ? `Venta de llanta · ${item.name}` : section.name, base, extra: 0, total: base, patches: 0, patch };
+}
+
+function catalogFromAccountsForm() {
+  const form = document.querySelector('form[data-action="save-settings"]');
+  if (!form) return catalog();
+  const data = Object.fromEntries(new FormData(form));
+  const sections = (catalog().sections || []).map((section) => {
+    if (section.kind === 'rims') {
+      const prices = {};
+      (section.rims || []).forEach((rim) => { prices[rim] = data[`rim-${section.id}-${rim}`] || 0; });
+      const extras = (section.extras || []).map((extra) => ({
+        ...extra,
+        price: data[`extra-${section.id}-${extra.id}`] ?? extra.price,
+      }));
+      return { ...section, prices, extras };
+    }
+    if (section.kind === 'single') return { ...section, price: data[`single-${section.id}`] || 0 };
+    if (section.kind === 'list') {
+      const count = Number(data.tireCount) || 0;
+      const items = [];
+      for (let index = 0; index < count; index += 1) {
+        items.push({
+          id: data[`tireId${index}`] || `llanta_${index + 1}`,
+          name: data[`tireName${index}`] || '',
+          price: data[`tirePrice${index}`] || 0,
+        });
+      }
+      return { ...section, items };
+    }
+    return section;
+  });
+  return { patchExtra: catalog().patchExtra || 2, sections };
+}
+
+function catalogPriceEditor() {
+  return (catalog().sections || []).map((section) => {
+    let fields = '';
+    if (section.kind === 'rims') {
+      const rims = (section.rims || []).map((rim) => `<label class="field"><span>Rin ${rim}</span><input name="rim-${section.id}-${rim}" inputmode="decimal" value="${section.prices?.[rim] ? esc(section.prices[rim]) : ''}" placeholder="0"></label>`).join('');
+      const extras = (section.extras || []).map((extra) => `<label class="field"><span>${esc(extra.name)}</span><input name="extra-${section.id}-${extra.id}" inputmode="decimal" value="${extra.price ? esc(extra.price) : ''}" placeholder="0"></label>`).join('');
+      fields = `<div class="price-grid">${rims}${extras}</div>`;
+    } else if (section.kind === 'single') {
+      fields = `<label class="field"><span>Precio</span><input name="single-${section.id}" inputmode="decimal" value="${section.price ? esc(section.price) : ''}" placeholder="0"></label>`;
+    } else {
+      const items = section.items || [];
+      const rows = items.map((item, index) => `<div class="tire-row">
+        <span>${index + 1}.</span>
+        <input type="hidden" name="tireId${index}" value="${esc(item.id)}">
+        <input name="tireName${index}" maxlength="80" value="${esc(item.name || '')}" placeholder="Nombre de la llanta">
+        <input name="tirePrice${index}" inputmode="decimal" value="${item.price ? esc(item.price) : ''}" placeholder="Precio">
+        <button class="btn ghost small" type="button" data-action="remove-tire" data-index="${index}">Quitar</button>
+      </div>`).join('');
+      fields = `${rows || '<p class="muted">Ninguna todavía. Agrega cada llanta con su precio.</p>'}
+        <input type="hidden" name="tireCount" value="${items.length}">
+        <button class="btn ghost small" type="button" data-action="add-tire">Agregar llanta</button>`;
+    }
+    const note = section.id === 'reparacion' ? '<p class="muted">El precio de cada rin es la reparación. La válvula va aparte y cada parche adicional se suma al registrar.</p>' : '';
+    return `<div class="sale-section"><h3>${esc(section.name)}</h3>${note}${fields}</div>`;
+  }).join('');
+}
+
+function optionalPrice(value, label) {
+  if (String(value ?? '').trim() === '') return 0;
+  return requireQty(value, label);
 }
 
 function excelCell(value, type) {
@@ -775,11 +843,13 @@ function exportSales() {
     return payment ? Number(payment.amount) || 0 : 0;
   };
   downloadExcel(`Registro de ventas ${todayISO()}.xls`, 'Ventas', [
-    'Fecha', 'Empleado', 'Servicio', 'Modelo', 'Descripción', 'Pago', 'Yape', 'Efectivo', 'Transferencia', 'Total', 'Pago del 30%', 'Estado',
+    'Fecha', 'Empleado', 'Servicio', 'Rin', 'Parches extra', 'Modelo', 'Descripción', 'Pago', 'Yape', 'Efectivo', 'Transferencia', 'Total', 'Pago del 30%', 'Estado',
   ], sales.map((sale) => [
     { value: formatDate(sale.date) },
     { value: sale.employeeName || '' },
     { value: sale.serviceName || sale.productName || '' },
+    { value: /^\d+$/.test(String(sale.rim || '')) ? `Rin ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : '') },
+    { value: Number(sale.extraPatches) || 0, type: 'Number' },
     { value: sale.carModel || '' },
     { value: sale.description || '' },
     { value: paymentText(sale) === '—' ? '' : paymentText(sale) },
@@ -813,7 +883,7 @@ function salesRegister() {
   });
   const rate = Number(state.settings.commissionRate) || 30;
   const summary = [...byPerson.values()].map((item) => `<div class="stat accent"><span>${esc(item.name)} · ${item.count} hoy</span><strong>${money(roundMoney(item.total * rate / 100))}</strong></div>`).join('');
-  const options = serviceChoices().map((service) => `<button class="btn ${service.empty ? 'ghost' : ''}" type="button" data-action="pick-service" data-id="${esc(service.id)}">${esc(service.name)}${service.price > 0 ? ` · ${money(service.price)}` : ''}</button>`).join('');
+  const sections = salesSections(manager);
   const table = rows.length ? `<div class="table-wrap"><table class="sheet">
       <thead><tr>
         <th>Fecha</th>${manager ? '<th>Empleado</th>' : ''}
@@ -832,10 +902,44 @@ function salesRegister() {
       </tr>`).join('')}</tbody>
     </table></div>` : '<div class="empty">Todavía no hay ventas en el registro.</div>';
   return `${manager ? demoBanner() : ''}
-    <p class="lead">${manager ? 'Lo que registre el empleado aparece aquí, con el 30% que le toca ese día.' : 'Elige el servicio. Otros abre una ventana para describir lo que se vendió.'}</p>
-    <div class="toolbar">${options}<button class="btn" type="button" data-action="pick-service" data-id="otros">Otros</button>${manager ? '<button class="btn ghost" type="button" data-action="export-sales">Exportar</button>' : ''}</div>
+    <p class="lead">${manager ? 'Elige la sección y el rin. Lo registrado aparece abajo, con el 30% de ese día.' : 'Elige la sección y el rin. En una reparación, cada parche adicional suma ' + money(catalog().patchExtra || 2) + '.'}</p>
+    <div class="toolbar">${manager ? '<button class="btn ghost" type="button" data-action="export-sales">Exportar</button>' : ''}</div>
+    ${sections}
     <div class="stats">${summary || `<div class="stat accent"><span>Pago de hoy</span><strong>${money(0)}</strong></div>`}</div>
     ${table}`;
+}
+
+function salesSections(manager) {
+  const saved = state.settings.catalog;
+  const blocks = (saved?.sections || []).map((section) => {
+    let body = '';
+    if (section.kind === 'rims') {
+      const rims = (section.rims || []).map((rim) => {
+        const price = Number(section.prices?.[rim]) || 0;
+        return `<button class="btn ghost" type="button" data-action="pick-option" data-section="${section.id}" data-rim="${rim}">Rin ${rim} · ${priceLabel(price)}</button>`;
+      }).join('');
+      const extras = (section.extras || []).map((extra) => {
+        const price = Number(extra.price) || 0;
+        return `<button class="btn ghost" type="button" data-action="pick-option" data-section="${section.id}" data-rim="${esc(extra.id)}">${esc(extra.name)} · ${priceLabel(price)}</button>`;
+      }).join('');
+      body = `<div class="rim-grid">${rims}${extras}</div>`;
+    } else {
+      const items = section.items || [];
+      body = items.length
+        ? `<div class="rim-grid">${items.map((item, index) => {
+          const price = Number(item.price) || 0;
+          return `<button class="btn ghost" type="button" data-action="pick-option" data-section="${section.id}" data-item="${esc(item.id)}">${index + 1}. ${esc(item.name)} · ${priceLabel(price)}</button>`;
+        }).join('')}</div>`
+        : `<p class="muted">${manager ? 'Agrega cada llanta en Cuentas, con su precio.' : 'La gerencia todavía no cargó las llantas.'}</p>`;
+    }
+    const note = section.id === 'reparacion'
+      ? `<p class="muted">Elige el rin. La válvula se cobra aparte. Cada parche adicional suma ${money(saved.patchExtra || 2)}.</p>`
+      : (section.id === 'lujo'
+        ? '<p class="muted">Rin 14 y 15, y del 16 al 20.</p>'
+        : (section.id === 'venta_llanta' ? '<p class="muted">Elige la llanta de la lista.</p>' : '<p class="muted">Elige el rin.</p>'));
+    return `<div class="sale-section"><h3>${esc(section.name)}</h3>${note}${body}</div>`;
+  }).join('');
+  return `${blocks}<div class="sale-section"><h3>Otros</h3><div class="rim-grid"><button class="btn ghost" type="button" data-action="pick-option" data-section="otros">Describir otra venta</button></div></div>`;
 }
 
 function captureSaleFields() {
@@ -843,8 +947,10 @@ function captureSaleFields() {
   const model = document.getElementById('sale-model');
   const desc = document.getElementById('sale-desc');
   const employee = document.getElementById('sale-employee');
+  const patches = document.getElementById('sale-patches');
   if (model) draft.carModel = model.value;
   if (desc) draft.description = desc.value;
+  if (patches) draft.extraPatches = patches.value;
   if (employee) draft.employeeId = employee.value;
   ['yape', 'efectivo', 'transferencia'].forEach((method) => {
     const field = document.getElementById(`pay-${method}`);
@@ -854,19 +960,23 @@ function captureSaleFields() {
 
 function saleFloat() {
   const draft = state.saleDraft;
-  const service = serviceChoices().find((item) => item.id === draft.serviceId);
-  const otros = draft.serviceId === 'otros';
-  const title = otros ? 'Otros' : (service ? service.name : 'Servicio');
-  const price = service && service.price > 0 ? service.price : 0;
+  const quote = quoteSelection(draft);
+  const otros = draft.sectionId === 'otros';
+  const repair = draft.sectionId === 'reparacion' && /^\d+$/.test(String(draft.rim || ''));
+  const patchesInvalid = repair && patchCount(draft.extraPatches) === null;
   const checks = ['yape', 'efectivo', 'transferencia'].map((method) => `<label><input type="checkbox" data-action="pay-method" data-method="${method}" ${draft.methods.includes(method) ? 'checked' : ''}> ${METHOD_LABEL[method]}</label>`).join('');
   const amounts = draft.methods.map((method) => `<label class="field"><span>Monto en ${METHOD_LABEL[method]}</span><input id="pay-${method}" inputmode="decimal" value="${esc(draft.amounts[method] || '')}" required></label>`).join('');
   const who = state.user.role === 'gerente'
     ? `<label class="field"><span>Empleado</span><select id="sale-employee">${state.employees.filter((emp) => emp.active !== false).map((emp) => `<option value="${esc(emp.id)}" ${emp.id === draft.employeeId ? 'selected' : ''}>${esc(emp.name)}</option>`).join('')}</select></label>`
     : '';
+  const priceLine = otros
+    ? 'Modelo del carro y método de pago. Si usas Yape, el monto es obligatorio.'
+    : `${quote.extra > 0 ? `Rin ${money(quote.base)} + parches ${money(quote.extra)}. ` : `Precio ${money(quote.total)}. `}Los montos tienen que sumar ${money(quote.total)}.`;
   return `<form class="bubble" data-action="save-sale">
-    <h2>${esc(title)}</h2>
-    <p class="muted">${price > 0 ? `Precio ${money(price)}. Los montos tienen que sumar ese valor.` : 'Modelo del carro y método de pago. Si usas Yape, el monto es obligatorio.'}</p>
+    <h2>${esc(quote.title)}</h2>
+    <p class="muted">${priceLine}</p>
     ${who}
+    ${repair ? `<label class="field"><span>Parches extra</span><input id="sale-patches" inputmode="numeric" value="${esc(draft.extraPatches || '0')}"></label>${patchesInvalid ? '<p class="form-error">Escribe un número entero de 0 a 30.</p>' : `<p class="muted">Cada parche extra suma ${money(quote.patch)}.</p>`}` : ''}
     ${otros ? `<label class="field"><span>Descripción de lo vendido</span><textarea id="sale-desc" maxlength="300" required>${esc(draft.description || '')}</textarea></label>` : ''}
     <label class="field"><span>Modelo del carro</span><input id="sale-model" maxlength="80" value="${esc(draft.carModel || '')}" required></label>
     <div class="field"><span>Método de pago</span><small class="muted">Máximo dos.</small></div>
@@ -1005,10 +1115,7 @@ function accountModal() {
     <label class="field"><span>Nombre</span><input name="name" maxlength="60" value="${esc(emp?.name || '')}" required></label>
     <label class="field"><span>Usuario</span><input name="username" maxlength="20" value="${esc(emp?.username || '')}" required></label>
     <label class="field"><span>Contraseña</span><input name="password" type="password" autocomplete="new-password" placeholder="${emp ? 'Déjala en blanco para no cambiarla' : 'Mínimo 4 caracteres'}"></label>
-    <div class="split">
-      <label class="field"><span>Comisión %</span><input name="commissionPercent" inputmode="decimal" value="${esc(emp?.commissionPercent ?? 10)}" required></label>
-      <label class="field"><span>Valor por hora</span><input name="hourlyRate" inputmode="decimal" value="${esc(emp?.hourlyRate ?? 0)}" required></label>
-    </div>
+    <label class="field"><span>Comisión %</span><input name="commissionPercent" inputmode="decimal" value="${esc(emp?.commissionPercent ?? 10)}" required></label>
     <label class="check"><input type="checkbox" name="active" ${emp && emp.active === false ? '' : 'checked'}> Puede iniciar sesión</label>
     <p class="form-error" data-form-error hidden></p>
     <div class="dialog-actions">
@@ -1041,7 +1148,7 @@ function meModal() {
 
 function render() {
   const active = document.activeElement;
-  const keepFocus = ['search', 'sale-model', 'sale-desc', 'pay-yape', 'pay-efectivo', 'pay-transferencia'];
+  const keepFocus = ['search', 'sale-model', 'sale-desc', 'sale-patches', 'pay-yape', 'pay-efectivo', 'pay-transferencia'];
   const restore = active && keepFocus.includes(active.id)
     ? { id: active.id, start: active.selectionStart, end: active.selectionEnd }
     : null;
@@ -1155,10 +1262,23 @@ async function onClick(event) {
       if (!confirm('¿Quitar estas horas?')) return;
       await api(`/api/shifts/${el.dataset.id}`, { method: 'DELETE' });
       await refresh();
-    } else if (action === 'pick-service') {
+    } else if (action === 'pick-option') {
+      const sectionId = el.dataset.section;
+      const rim = el.dataset.rim || '';
+      const itemId = el.dataset.item || '';
+      if (sectionId !== 'otros') {
+        const quote = quoteSelection({ sectionId, rim, itemId, extraPatches: '0' });
+        if (!(quote.total > 0)) {
+          showToast('Esa opción todavía no tiene precio. La gerencia lo anota en Cuentas.', 'err');
+          return;
+        }
+      }
       const first = state.employees.find((item) => item.active !== false);
       state.saleDraft = {
-        serviceId: el.dataset.id,
+        sectionId,
+        rim,
+        itemId,
+        extraPatches: '0',
         description: '',
         carModel: '',
         methods: [],
@@ -1166,6 +1286,18 @@ async function onClick(event) {
         employeeId: state.user.role === 'empleado' ? state.user.id : (first?.id || ''),
       };
       state.modal = { type: 'registro' };
+      render();
+    } else if (action === 'add-tire') {
+      const next = catalogFromAccountsForm();
+      const tires = next.sections.find((section) => section.id === 'venta_llanta');
+      if (tires) tires.items.push({ id: `llanta_${Date.now().toString(36)}`, name: '', price: '' });
+      state.catalogDraft = next;
+      render();
+    } else if (action === 'remove-tire') {
+      const next = catalogFromAccountsForm();
+      const tires = next.sections.find((section) => section.id === 'venta_llanta');
+      if (tires) tires.items.splice(Number(el.dataset.index), 1);
+      state.catalogDraft = next;
       render();
     } else if (action === 'pay-method') {
       captureSaleFields();
@@ -1277,10 +1409,13 @@ async function onSubmit(event) {
     if (action === 'save-sale') {
       captureSaleFields();
       const draft = state.saleDraft;
-      const service = serviceChoices().find((item) => item.id === draft.serviceId);
-      const price = service && service.price > 0 ? service.price : 0;
+      const repair = draft.sectionId === 'reparacion' && /^\d+$/.test(String(draft.rim || ''));
+      const patches = repair ? patchCount(draft.extraPatches) : 0;
+      if (repair && patches === null) throw new Error('Los parches extra deben ser un número entero de 0 a 30.');
+      const quote = quoteSelection({ ...draft, extraPatches: String(patches || 0) });
       if (!String(draft.carModel || '').trim()) throw new Error('Escribe el modelo del carro.');
-      if (draft.serviceId === 'otros' && !String(draft.description || '').trim()) throw new Error('Describe lo que se vendió.');
+      if (draft.sectionId === 'otros' && !String(draft.description || '').trim()) throw new Error('Describe lo que se vendió.');
+      if (draft.sectionId !== 'otros' && !(quote.total > 0)) throw new Error('Esa opción todavía no tiene precio.');
       if (!draft.methods.length) throw new Error('Elige un método de pago.');
       if (draft.methods.length > 2) throw new Error('Solo puedes elegir dos métodos de pago.');
       const payments = draft.methods.map((method) => {
@@ -1291,11 +1426,14 @@ async function onSubmit(event) {
         return { method, amount };
       });
       const paid = roundMoney(payments.reduce((sum, item) => sum + item.amount, 0));
-      if (price > 0 && Math.abs(paid - price) > 0.009) throw new Error('Los montos deben sumar el precio del servicio.');
+      if (quote.total > 0 && Math.abs(paid - quote.total) > 0.009) throw new Error('Los montos deben sumar el precio de la opción.');
       await api('/api/sales', {
         method: 'POST',
         body: {
-          serviceId: draft.serviceId,
+          sectionId: draft.sectionId,
+          rim: draft.rim,
+          itemId: draft.itemId,
+          extraPatches: patches || 0,
           description: draft.description,
           carModel: draft.carModel,
           payments,
@@ -1340,7 +1478,7 @@ async function onSubmit(event) {
         username: data.username,
         password: data.password || '',
         commissionPercent: requireQty(data.commissionPercent, 'El porcentaje'),
-        hourlyRate: requireQty(data.hourlyRate || '0', 'El valor por hora'),
+        hourlyRate: 0,
         active: Boolean(form.elements.active?.checked),
       };
       if (state.modal.id) await api(`/api/employees/${state.modal.id}`, { method: 'PUT', body: payload });
@@ -1350,11 +1488,29 @@ async function onSubmit(event) {
       return;
     }
     if (action === 'save-settings') {
-      const services = [0, 1, 2, 3].map((index) => ({
-        name: data[`serviceName${index}`] || '',
-        price: data[`servicePrice${index}`] ? requireQty(data[`servicePrice${index}`], 'El precio') : 0,
-      }));
-      await api('/api/settings', { method: 'PUT', body: { businessName: data.businessName, currency: data.currency, services } });
+      const draft = catalogFromAccountsForm();
+      const sections = draft.sections.map((section) => {
+        if (section.kind === 'rims') {
+          const prices = {};
+          (section.rims || []).forEach((rim) => { prices[rim] = optionalPrice(section.prices[rim], `El precio del rin ${rim}`); });
+          const extras = (section.extras || []).map((extra) => ({
+            id: extra.id,
+            name: extra.name,
+            price: optionalPrice(extra.price, `El precio de ${extra.name}`),
+          }));
+          return { id: section.id, prices, extras };
+        }
+        if (section.kind === 'single') return { id: section.id, price: optionalPrice(section.price, `El precio de ${section.name}`) };
+        return {
+          id: section.id,
+          items: (section.items || []).map((item) => ({
+            id: item.id,
+            name: item.name,
+            price: optionalPrice(item.price, 'El precio de la llanta'),
+          })),
+        };
+      });
+      await api('/api/settings', { method: 'PUT', body: { businessName: data.businessName, currency: data.currency, catalog: { sections } } });
       await refresh();
       showToast('Datos del negocio guardados.');
       return;
@@ -1389,10 +1545,11 @@ function onInput(event) {
   if (id === 'search') state.query = event.target.value;
   if (id === 'sale-model') state.saleDraft.carModel = event.target.value;
   if (id === 'sale-desc') state.saleDraft.description = event.target.value;
+  if (id === 'sale-patches') state.saleDraft.extraPatches = event.target.value;
   if (id === 'pay-yape' || id === 'pay-efectivo' || id === 'pay-transferencia') {
     state.saleDraft.amounts[id.slice(4)] = event.target.value;
   }
-  if (['search', 'sale-model', 'sale-desc', 'pay-yape', 'pay-efectivo', 'pay-transferencia'].includes(id)) render();
+  if (['search', 'sale-model', 'sale-desc', 'sale-patches', 'pay-yape', 'pay-efectivo', 'pay-transferencia'].includes(id)) render();
 }
 
 function onChange(event) {
