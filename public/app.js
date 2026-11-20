@@ -340,7 +340,7 @@ function loginView() {
   return `<section class="login">
     <div class="login-hero">
       <div>
-        <span class="logo-plate"><img class="logo logo-hero" src="/logo.png" alt="GO Services"></span>
+        <span class="logo-plate"><img class="logo logo-hero" src="logo.png" alt="GO Services"></span>
         <p class="kicker">GO Services</p>
         <h1>Inventario claro para la gerencia y el equipo.</h1>
         <p>Tú ves lo que hay, lo que se acabó y la comisión. Tus empleados actualizan las existencias desde su propia entrada.</p>
@@ -373,7 +373,7 @@ function shell() {
   )).join('');
   return `<div class="app">
     <aside class="sidebar">
-      <div class="brand"><span class="logo-plate"><img class="logo" src="/logo.png" alt="GO Services"></span><span><strong>${esc(state.settings.businessName)}</strong><small>${state.user.role === 'gerente' ? 'Gerencia' : 'Empleado'}</small></span></div>
+      <div class="brand"><span class="logo-plate"><img class="logo" src="logo.png" alt="GO Services"></span><span><strong>${esc(state.settings.businessName)}</strong><small>${state.user.role === 'gerente' ? 'Gerencia' : 'Empleado'}</small></span></div>
       <nav class="nav">${nav}</nav>
       <div class="sidefoot">
         <div><strong>${esc(state.user.name)}</strong><small>@${esc(state.user.username)}</small></div>
