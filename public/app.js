@@ -493,20 +493,19 @@ function homeManager() {
   const date = new Date().toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long' });
   const people = state.employees.length
     ? state.employees.map((emp) => {
-      const day = sumEmployee(emp, state.day);
-      const life = sumEmployee(emp, 'all');
+      const day = sumEmployee(emp, todayISO());
       const dayPay = payModeOf(emp) === 'salario' ? `Salario del día · ${money(emp.dailySalary || 0)}` : `${percentLabel(emp.commissionPercent)} del día · ${money(day.commission)}`;
       return `<button class="person" type="button" data-action="open-and-go" data-id="${esc(emp.id)}">
         <span class="avatar" style="background:${tint(emp.name)}">${esc(initials(emp.name))}</span>
         <span><strong>${esc(emp.name)}</strong><small>${dayPay}</small></span>
-        <em>${esc(owedText(life.owed))}</em>
+        <em>${money(day.salesTotal)} en ventas</em>
       </button>`;
     }).join('')
     : `<div class="empty">Todavía no hay empleados. Crea sus cuentas para ver la comisión y lo que falta por pagar.</div>`;
   return `${demoBanner()}
     <p class="date">${esc(date)}</p>
     <div class="stats">
-      <button class="stat accent" type="button" data-action="go" data-view="equipo"><span>Por pagar al equipo</span><strong>${money(totalOwed())}</strong></button>
+      <button class="stat accent" type="button" data-action="go" data-view="equipo"><span>Pago de hoy</span><strong>${money(roundMoney(state.employees.reduce((total, emp) => total + sumEmployee(emp, todayISO()).earned, 0)))}</strong></button>
       <button class="stat" type="button" data-action="go-filter" data-filter="agotado"><span>Agotados</span><strong>${counts.agotado}</strong></button>
       <button class="stat" type="button" data-action="go-filter" data-filter="bajo"><span>Queda poco</span><strong>${counts.bajo}</strong></button>
       <button class="stat" type="button" data-action="go-filter" data-filter="ok"><span>Disponibles</span><strong>${counts.ok}</strong></button>
@@ -606,11 +605,10 @@ function inventory() {
 
 function employeeStrip() {
   const day = sumEmployee(state.user, state.day);
-  const life = sumEmployee(state.user, 'all');
   const label = payModeOf(state.user) === 'salario' ? 'Salario de este día' : 'Porcentaje de este día';
   return `<section class="strip">
     <div><span>${label}</span><strong>${money(day.earned)}</strong></div>
-    <div><span>Por pagarte</span><strong>${money(Math.max(0, life.owed))}</strong></div>
+    <div><span>Ventas de este día</span><strong>${money(day.salesTotal)}</strong></div>
   </section>`;
 }
 
@@ -663,14 +661,13 @@ function daySelect() {
 }
 
 function team() {
-  return `<p class="lead">Ventas y pago del día. El saldo junta lo que falta de los días anteriores que todavía están en el sitio.</p>
+  return `<p class="lead">Ventas y pago del día. El pago se lleva por fuera del inventario.</p>
     <div class="section-head"><h2>${esc(dayName(state.day))}</h2>${daySelect()}</div>
     ${state.employees.length ? state.employees.map(employeeCard).join('') : '<div class="empty">Crea un empleado en Cuentas para llevar su pago.</div>'}`;
 }
 
 function employeeCard(emp) {
   const day = sumEmployee(emp, state.day);
-  const life = sumEmployee(emp, 'all');
   const open = state.openEmployee === emp.id;
   const payName = day.mode === 'salario' ? 'Salario del día' : 'Porcentaje del día';
   return `<article class="team-card">
@@ -679,20 +676,14 @@ function employeeCard(emp) {
         <h3>${esc(emp.name)} ${emp.active ? '' : '<span class="badge off">Inactivo</span>'}</h3>
         <p>@${esc(emp.username)} · ${payLabel(emp)}</p>
       </div>
-      <div>
-        <span class="muted">Saldo</span>
-        <p class="owed">${esc(owedText(life.owed))}</p>
-      </div>
     </div>
     <div class="figures">
       <div><span>Ventas del día</span><strong>${money(day.salesTotal)}</strong></div>
       <div><span>${payName}</span><strong>${money(day.earned)}</strong></div>
-      <div><span>Pagado este día</span><strong>${money(day.paid)}</strong></div>
     </div>
     <div class="inline-actions" style="margin-top:12px">
-      <button class="btn small" type="button" data-action="pay" data-id="${esc(emp.id)}">Registrar pago</button>
       <button class="btn ghost small" type="button" data-action="toggle-employee" data-id="${esc(emp.id)}">${open ? 'Ocultar detalle' : 'Ver detalle'}</button>
-      <button class="btn ghost small" type="button" data-action="edit-employee" data-id="${esc(emp.id)}">Editar pago</button>
+      <button class="btn ghost small" type="button" data-action="edit-employee" data-id="${esc(emp.id)}">Editar</button>
     </div>
     ${open ? employeeDetail(emp, day) : ''}
   </article>`;
@@ -700,12 +691,9 @@ function employeeCard(emp) {
 
 function employeeDetail(emp, month) {
   const sales = [...month.allSales].sort(byDateDesc);
-  const payments = [...month.payments].sort(byDateDesc);
   return `<div class="detail">
-    <h3>Ventas y comisión</h3>
+    <h3>Ventas del día</h3>
     ${sales.length ? `<ul class="lines">${sales.map((sale) => `<li class="${sale.voided ? 'void' : ''}"><span>${formatDate(sale.date)} · ${esc(sale.productName)} × ${qty(sale.quantity)}${sale.payMode === 'salario' ? '' : ` · ${percentLabel(sale.commissionPercent)}`}</span><span><strong>${money(sale.payMode === 'salario' ? 0 : sale.commissionAmount)}</strong> ${canVoid(sale) ? `<button class="btn ghost small" type="button" data-action="void-sale" data-id="${esc(sale.id)}">Anular</button>` : (sale.voided ? '<small>Anulada</small>' : '')}</span></li>`).join('')}</ul>` : '<p class="muted">Sin ventas en este día. Se registran en Registro de ventas.</p>'}
-    <h3>Pagos</h3>
-    ${payments.length ? `<ul class="lines">${payments.map((payment) => `<li><span>${formatDate(payment.date)} ${payment.notes ? `· ${esc(payment.notes)}` : ''}</span><span><strong>${money(payment.amount)}</strong> <button class="btn ghost small" type="button" data-action="delete-payment" data-id="${esc(payment.id)}">Quitar</button></span></li>`).join('')}</ul>` : '<p class="muted">Sin pagos en este periodo.</p>'}
   </div>`;
 }
 
@@ -732,7 +720,12 @@ function accounts() {
         <label class="field"><span>Moneda</span><select name="currency">${['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP'].map((code) => `<option ${code === state.settings.currency ? 'selected' : ''}>${code}</option>`).join('')}</select></label>
       </div>
       <label class="field"><span>Enlace de Google Sheets</span><input name="sheetUrl" value="${esc(state.settings.sheetUrl || '')}" placeholder="https://script.google.com/macros/s/.../exec"></label>
-      <p class="muted">Las ventas del día se quedan aquí. Al día siguiente se van a una carpeta de Google llamada GO Services: un documento por mes y, adentro, una hoja por día. <button class="link" type="button" data-action="copy-sheet-code">Copiar el código de Google</button></p>
+      <p class="muted">No pegues el enlace de la hoja. Pega el enlace que termina en <b>/exec</b>. <button class="link" type="button" data-action="copy-sheet-code">Copiar el código de Google</button></p>
+      <ol class="steps">
+        <li>Copia el código y ábrelo en script.google.com, en un proyecto nuevo.</li>
+        <li>Implementar, Nueva implementación, Aplicación web. Quién tiene acceso: cualquier persona.</li>
+        <li>Copia el enlace que termina en /exec y pégalo arriba. Guarda el negocio.</li>
+      </ol>
       <div class="section-head"><h2>Precios del registro de ventas</h2></div>
       <p class="lead">Cada rim y cada llanta tienen su precio. En cualquier venta, cada parche y cada válvula suman ${money(2)}.</p>
       ${catalogPriceEditor()}
@@ -744,17 +737,14 @@ function accounts() {
 
 function commissionsPage() {
   const day = sumEmployee(state.user, state.day);
-  const life = sumEmployee(state.user, 'all');
   const sales = [...day.allSales].sort(byDateDesc);
   const lead = payModeOf(state.user) === 'salario'
-    ? `Tu salario es ${money(state.user.dailySalary || 0)} por día. El pago lo anota la gerencia.`
-    : `Te corresponde el ${percentLabel(state.user.commissionPercent)} de lo que registres. El pago lo anota la gerencia.`;
+    ? `Tu salario es ${money(state.user.dailySalary || 0)} por día.`
+    : `Te corresponde el ${percentLabel(state.user.commissionPercent)} de lo que registres.`;
   return `<p class="lead">${lead}</p>
     <div class="stats">
-      <div class="stat accent"><span>Por pagarte</span><strong>${money(Math.max(0, life.owed))}</strong></div>
-      <div class="stat"><span>${day.mode === 'salario' ? 'Salario del día' : 'Porcentaje del día'}</span><strong>${money(day.earned)}</strong></div>
+      <div class="stat accent"><span>${day.mode === 'salario' ? 'Salario del día' : 'Porcentaje del día'}</span><strong>${money(day.earned)}</strong></div>
       <div class="stat"><span>Ventas del día</span><strong>${money(day.salesTotal)}</strong></div>
-      <div class="stat"><span>Pagado en total</span><strong>${money(life.paid)}</strong></div>
     </div>
     <div class="section-head"><h2>Ventas del día</h2>${daySelect()}</div>
     ${sales.length ? `<ul class="lines">${sales.map((sale) => `<li class="${sale.voided ? 'void' : ''}"><span>${formatDate(sale.date)} · ${esc(sale.productName)} × ${qty(sale.quantity)}</span><span><strong>${money(sale.payMode === 'salario' ? 0 : sale.commissionAmount)}</strong> ${canVoid(sale) ? `<button class="btn ghost small" type="button" data-action="void-sale" data-id="${esc(sale.id)}">Anular</button>` : (sale.voided ? '<small>Anulada</small>' : '')}</span></li>`).join('')}</ul>` : '<div class="empty">No hay ventas en este día.</div>'}`;
@@ -996,7 +986,7 @@ function salesRegister() {
   return `${manager ? demoBanner() : ''}
     <p class="lead">Elige la sección y el rim. Parches y válvulas suman ${money(2)} cada uno, en cualquier venta. Abajo quedan las ventas de este día.</p>
     <div class="section-head"><h2>${esc(dayName(state.day))}</h2>${daySelect()}</div>
-    <div class="toolbar">${manager ? '<button class="btn ghost" type="button" data-action="export-sales">Exportar</button>' : ''}</div>
+    <div class="toolbar"><button class="btn ghost" type="button" data-action="export-sales">Exportar Excel</button></div>
     ${sheetNote}
     ${sections}
     <div class="stats">${summary || `<div class="stat accent"><span>Pago de hoy</span><strong>${money(0)}</strong></div>`}</div>
