@@ -1,5 +1,6 @@
 const http = require('http');
 const https = require('https');
+const tls = require('tls');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -10,9 +11,14 @@ const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
 const DB_PATH = path.join(DATA_DIR, 'db.json');
+if (typeof tls.getCACertificates === 'function') {
+  const systemCerts = tls.getCACertificates('system');
+  if (systemCerts.length) https.globalAgent.options.ca = tls.getCACertificates('default').concat(systemCerts);
+}
 const CURRENCIES = new Set(['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP']);
 const PATCH_EXTRA = 2;
 const VALVE_EXTRA = 2;
+const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyrV4sKIDKSXOrPnSnVsLx5NBgRwvytvtEzcbenHKi4Yk85VfdXinjTeQlxKmESFgE/exec';
 const SECTION_DEFS = [
   {
     id: 'reparacion',
@@ -507,7 +513,7 @@ function payloadFor(user) {
       commissionRate: commissionRate(),
       services: db.settings.services,
       catalog: db.settings.catalog,
-      sheetUrl: db.settings.sheetUrl || '',
+        sheetUrl: '',
     },
     products: db.products,
     employees: isManager ? employees : employees.filter((item) => item.id === user.id),
@@ -648,15 +654,6 @@ function withAddons(serviceName, description, catalogPrice, extraPatches, extraV
   };
 }
 
-function cleanSheetUrl(value) {
-  const url = String(value || '').trim();
-  if (!url) return '';
-  if (!/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url)) {
-    throw httpError(400, 'Pega el enlace de la aplicación web de Google, el que termina en /exec.');
-  }
-  return url;
-}
-
 function requestText(url, method, body, redirects) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
@@ -686,9 +683,14 @@ function sheetSale(sale) {
   const time = sale.createdAt ? new Date(sale.createdAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : '';
   const payment = Array.isArray(sale.payments) ? sale.payments.map((item) => `${item.method} ${item.amount}`).join(' + ') : '';
   const rim = /^\d+$/.test(String(sale.rim || '')) ? `Rim ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : '');
+  const parts = String(sale.date || '').split('-').map(Number);
+  const weekday = parts[0] && parts[1] && parts[2]
+    ? ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][new Date(parts[0], parts[1] - 1, parts[2]).getDay()]
+    : '';
   return {
     id: sale.id,
     date: sale.date,
+    weekday,
     time,
     employeeName: sale.employeeName || '',
     serviceName: sale.serviceName || '',
@@ -696,6 +698,7 @@ function sheetSale(sale) {
     extraPatches: sale.extraPatches || 0,
     extraValves: sale.extraValves || 0,
     carModel: sale.carModel || '',
+    description: sale.description || '',
     payment,
     total: sale.total || 0,
     commissionAmount: sale.commissionAmount || 0,
@@ -712,8 +715,7 @@ function archiveOldSales() {
 }
 
 async function archiveOldSalesNow() {
-  const url = String(db.settings.sheetUrl || '').trim();
-  if (!url) return;
+  const url = SHEET_URL;
   const old = db.sales.filter((sale) => String(sale.date || '') < today());
   if (!old.length) return;
   const response = await requestText(url, 'POST', JSON.stringify({ sales: old.map(sheetSale) }), 5);
@@ -797,7 +799,6 @@ async function handleApi(req, res, pathname) {
       db.settings.currency = body.currency;
     }
     if ('demo' in body) db.settings.demo = Boolean(body.demo);
-    if ('sheetUrl' in body) db.settings.sheetUrl = cleanSheetUrl(body.sheetUrl);
     if (body.catalog) db.settings.catalog = catalogFromBody(body.catalog);
     await persist();
     return send(res, 200, payloadFor(user));

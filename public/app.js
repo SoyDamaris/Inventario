@@ -1,56 +1,3 @@
-const SHEET_CODE = `var FOLDER = 'GO Services';
-var MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-var HEADERS = ['Id','Fecha','Hora','Empleado','Servicio','Rim','Parches','Válvulas','Modelo','Pago','Total','Comisión','Estado'];
-
-function doPost(e) {
-  var data = JSON.parse(e.postData.contents);
-  var folder = folderByName_();
-  (data.sales || []).forEach(function(sale) {
-    var parts = String(sale.date || '').split('-');
-    var month = MONTHS[Number(parts[1]) - 1] || parts[1];
-    var book = spreadsheet_(folder, month + ' ' + parts[0]);
-    var sheet = daySheet_(book, Number(parts[2]) || 1);
-    if (already_(sheet, sale.id)) return;
-    sheet.appendRow([
-      sale.id, sale.date, sale.time || '', sale.employeeName || '', sale.serviceName || '',
-      sale.rim || '', sale.extraPatches || 0, sale.extraValves || 0, sale.carModel || '',
-      sale.payment || '', sale.total || 0, sale.commissionAmount || 0, sale.voided ? 'Anulada' : 'Registrada'
-    ]);
-  });
-  return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
-}
-
-function folderByName_() {
-  var found = DriveApp.getFoldersByName(FOLDER);
-  return found.hasNext() ? found.next() : DriveApp.createFolder(FOLDER);
-}
-
-function spreadsheet_(folder, name) {
-  var files = folder.getFilesByName(name);
-  if (files.hasNext()) return SpreadsheetApp.open(files.next());
-  var book = SpreadsheetApp.create(name);
-  DriveApp.getFileById(book.getId()).moveTo(folder);
-  return book;
-}
-
-function daySheet_(book, day) {
-  var name = 'Día ' + day;
-  var sheet = book.getSheetByName(name);
-  if (!sheet) {
-    sheet = book.insertSheet(name);
-    sheet.appendRow(HEADERS);
-  }
-  var blank = book.getSheetByName('Hoja 1');
-  if (blank && book.getSheets().length > 1 && blank.getLastRow() === 0) book.deleteSheet(blank);
-  return sheet;
-}
-
-function already_(sheet, id) {
-  var values = sheet.getRange(1, 1, Math.max(sheet.getLastRow(), 1), 1).getValues();
-  return values.some(function(row) { return String(row[0]) === String(id); });
-}
-`;
-
 const state = {
   booting: true,
   user: null,
@@ -719,13 +666,6 @@ function accounts() {
         <label class="field"><span>Nombre</span><input name="businessName" maxlength="60" value="${esc(state.settings.businessName)}"></label>
         <label class="field"><span>Moneda</span><select name="currency">${['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP'].map((code) => `<option ${code === state.settings.currency ? 'selected' : ''}>${code}</option>`).join('')}</select></label>
       </div>
-      <label class="field"><span>Enlace de Google Sheets</span><input name="sheetUrl" value="${esc(state.settings.sheetUrl || '')}" placeholder="https://script.google.com/macros/s/.../exec"></label>
-      <p class="muted">No pegues el enlace de la hoja. Pega el enlace que termina en <b>/exec</b>. <button class="link" type="button" data-action="copy-sheet-code">Copiar el código de Google</button></p>
-      <ol class="steps">
-        <li>Copia el código y ábrelo en script.google.com, en un proyecto nuevo.</li>
-        <li>Implementar, Nueva implementación, Aplicación web. Quién tiene acceso: cualquier persona.</li>
-        <li>Copia el enlace que termina en /exec y pégalo arriba. Guarda el negocio.</li>
-      </ol>
       <div class="section-head"><h2>Precios del registro de ventas</h2></div>
       <p class="lead">Cada rim y cada llanta tienen su precio. En cualquier venta, cada parche y cada válvula suman ${money(2)}.</p>
       ${catalogPriceEditor()}
@@ -866,19 +806,29 @@ function optionalPrice(value, label) {
   return requireQty(value, label);
 }
 
-function excelCell(value, type) {
+const EXCEL_MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+const EXCEL_WEEKDAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+
+function excelCell(value, type, style) {
   const kind = type || (typeof value === 'number' ? 'Number' : 'String');
   const text = kind === 'Number' ? String(Number(value) || 0) : esc(value ?? '');
-  return `<Cell><Data ss:Type="${kind}">${text}</Data></Cell>`;
+  return `<Cell${style ? ` ss:StyleID="${style}"` : ''}><Data ss:Type="${kind}">${text}</Data></Cell>`;
 }
 
-function downloadExcel(filename, sheetName, headers, rows) {
-  const head = `<Row>${headers.map((header) => excelCell(header, 'String')).join('')}</Row>`;
-  const body = rows.map((row) => `<Row>${row.map((cell) => excelCell(cell.value, cell.type)).join('')}</Row>`).join('');
+function downloadWorkbook(filename, sheets) {
+  const styles = `<Styles>
+    <Style ss:ID="head"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#AB2125" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="day"><Font ss:Bold="1"/><Interior ss:Color="#F6E8E8" ss:Pattern="Solid"/></Style>
+  </Styles>`;
+  const body = sheets.map((sheet) => {
+    const head = `<Row>${sheet.headers.map((header) => excelCell(header, 'String', 'head')).join('')}</Row>`;
+    const rows = sheet.rows.map((row) => `<Row>${row.cells.map((cell) => excelCell(cell.value, cell.type, row.style)).join('')}</Row>`).join('');
+    return `<Worksheet ss:Name="${esc(sheet.name)}"><Table>${head}${rows}</Table></Worksheet>`;
+  }).join('');
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <?mso-application progid="Excel.Sheet"?>
 <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-<Worksheet ss:Name="${esc(sheetName)}"><Table>${head}${body}</Table></Worksheet>
+${styles}${body}
 </Workbook>`;
   const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
   const url = URL.createObjectURL(blob);
@@ -889,6 +839,10 @@ function downloadExcel(filename, sheetName, headers, rows) {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadExcel(filename, sheetName, headers, rows) {
+  downloadWorkbook(filename, [{ name: sheetName, headers, rows: rows.map((cells) => ({ cells })) }]);
 }
 
 function exportInventory() {
@@ -908,32 +862,80 @@ function exportInventory() {
   showToast('Excel del inventario descargado.');
 }
 
-function exportSales() {
-  const sales = [...state.sales].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-  const amountOf = (sale, method) => {
-    const payment = (sale.payments || []).find((item) => item.method === method);
-    return payment ? Number(payment.amount) || 0 : 0;
+function saleClock(sale) {
+  if (!sale.createdAt) return '';
+  const date = new Date(sale.createdAt);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+}
+
+function saleExcelRow(sale, weekday) {
+  return {
+    cells: [
+      { value: weekday },
+      { value: formatDate(sale.date) },
+      { value: saleClock(sale) },
+      { value: sale.employeeName || '' },
+      { value: sale.serviceName || sale.productName || '' },
+      { value: /^\d+$/.test(String(sale.rim || '')) ? `Rim ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : '') },
+      { value: Number(sale.extraPatches) || 0, type: 'Number' },
+      { value: Number(sale.extraValves) || 0, type: 'Number' },
+      { value: sale.carModel || '' },
+      { value: sale.description || '' },
+      { value: paymentText(sale) === '—' ? '' : paymentText(sale) },
+      { value: Number(sale.total) || 0, type: 'Number' },
+      { value: sale.voided || sale.payMode === 'salario' ? 0 : Number(sale.commissionAmount) || 0, type: 'Number' },
+      { value: sale.voided ? 'Anulada' : 'Registrada' },
+    ],
   };
-  downloadExcel(`Registro de ventas ${todayISO()}.xls`, 'Ventas', [
-    'Fecha', 'Empleado', 'Servicio', 'Rim', 'Parches', 'Válvulas', 'Modelo', 'Descripción', 'Pago', 'Yape', 'Efectivo', 'Transferencia', 'Total', 'Porcentaje', 'Estado',
-  ], sales.map((sale) => [
-    { value: formatDate(sale.date) },
-    { value: sale.employeeName || '' },
-    { value: sale.serviceName || sale.productName || '' },
-    { value: /^\d+$/.test(String(sale.rim || '')) ? `Rim ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : '') },
-    { value: Number(sale.extraPatches) || 0, type: 'Number' },
-    { value: Number(sale.extraValves) || 0, type: 'Number' },
-    { value: sale.carModel || '' },
-    { value: sale.description || '' },
-    { value: paymentText(sale) === '—' ? '' : paymentText(sale) },
-    { value: amountOf(sale, 'yape'), type: 'Number' },
-    { value: amountOf(sale, 'efectivo'), type: 'Number' },
-    { value: amountOf(sale, 'transferencia'), type: 'Number' },
-    { value: Number(sale.total) || 0, type: 'Number' },
-    { value: sale.voided || sale.payMode === 'salario' ? 0 : Number(sale.commissionAmount) || 0, type: 'Number' },
-    { value: sale.voided ? 'Anulada' : 'Registrada' },
-  ]));
-  showToast('Excel del registro de ventas descargado.');
+}
+
+function exportSales() {
+  const year = String(state.day || todayISO()).slice(0, 4);
+  const sales = state.sales.filter((sale) => String(sale.date || '').startsWith(`${year}-`));
+  const headers = ['Día', 'Fecha', 'Hora', 'Empleado', 'Servicio', 'Rim', 'Parches', 'Válvulas', 'Modelo', 'Descripción', 'Pago', 'Total', 'Porcentaje', 'Estado'];
+  const sheets = EXCEL_MONTHS.map((name, index) => {
+    const month = String(index + 1).padStart(2, '0');
+    const last = new Date(Number(year), index + 1, 0).getDate();
+    const rows = [];
+    for (let day = 1; day <= last; day += 1) {
+      const iso = `${year}-${month}-${String(day).padStart(2, '0')}`;
+      const weekday = EXCEL_WEEKDAYS[new Date(Number(year), index, day).getDay()];
+      const ofDay = sales
+        .filter((sale) => sale.date === iso)
+        .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+      if (!ofDay.length) {
+        rows.push({
+          style: 'day',
+          cells: [
+            { value: weekday },
+            { value: formatDate(iso) },
+            { value: '' },
+            { value: '' },
+            { value: 'Sin ventas' },
+            { value: '' },
+            { value: '' },
+            { value: '' },
+            { value: '' },
+            { value: '' },
+            { value: '' },
+            { value: 0, type: 'Number' },
+            { value: 0, type: 'Number' },
+            { value: '' },
+          ],
+        });
+        continue;
+      }
+      ofDay.forEach((sale, position) => {
+        const row = saleExcelRow(sale, weekday);
+        if (position === 0) row.style = 'day';
+        rows.push(row);
+      });
+    }
+    return { name, headers, rows };
+  });
+  downloadWorkbook(`Ventas ${year}.xls`, sheets);
+  showToast(`Excel de ${year} descargado. Cada hoja es un mes.`);
 }
 
 function paymentText(sale) {
@@ -963,7 +965,7 @@ function salesRegister() {
   }).join('');
   const waiting = state.sales.filter((sale) => String(sale.date || '') < todayISO()).length;
   const sheetNote = waiting
-    ? `<p class="muted">${waiting} venta${waiting === 1 ? '' : 's'} de días anteriores sigue${waiting === 1 ? '' : 'n'} en el sitio. ${state.settings.sheetUrl ? 'Se pasan a Google Sheets al abrir el inventario.' : 'Conecta Google Sheets en Cuentas para guardarlas por mes y por día.'}</p>`
+    ? `<p class="muted">${waiting} venta${waiting === 1 ? '' : 's'} de días anteriores sigue${waiting === 1 ? '' : 'n'} en el sitio. Se guardan al abrir el inventario.</p>`
     : '';
   const sections = salesSections(manager);
   const table = rows.length ? `<div class="table-wrap"><table class="sheet">
@@ -1403,13 +1405,6 @@ async function onClick(event) {
       const next = Math.max(0, Math.min(30, current + Number(el.dataset.dir)));
       state.saleDraft[field] = String(next);
       render();
-    } else if (action === 'copy-sheet-code') {
-      try {
-        await navigator.clipboard.writeText(SHEET_CODE);
-        showToast('Código copiado. Pégalo en script.google.com.');
-      } catch {
-        showToast('No se pudo copiar. Abre Cuentas de nuevo e inténtalo.', 'err');
-      }
     } else if (action === 'add-tire') {
       const next = catalogFromAccountsForm();
       const tires = next.sections.find((section) => section.id === 'venta_llanta');
@@ -1638,7 +1633,7 @@ async function onSubmit(event) {
           })),
         };
       });
-      await api('/api/settings', { method: 'PUT', body: { businessName: data.businessName, currency: data.currency, sheetUrl: data.sheetUrl || '', catalog: { sections } } });
+      await api('/api/settings', { method: 'PUT', body: { businessName: data.businessName, currency: data.currency, catalog: { sections } } });
       await refresh();
       showToast('Datos del negocio guardados.');
       return;

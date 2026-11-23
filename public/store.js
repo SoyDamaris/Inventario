@@ -8,6 +8,7 @@
   const SID_KEY = 'go-services-sid';
   const PATCH_EXTRA = 2;
   const VALVE_EXTRA = 2;
+  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyrV4sKIDKSXOrPnSnVsLx5NBgRwvytvtEzcbenHKi4Yk85VfdXinjTeQlxKmESFgE/exec';
   const CURRENCIES = new Set(['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP']);
   const SECTION_DEFS = [
     { id: 'reparacion', name: 'Reparación', kind: 'rims', rims: ['14', '15', '16', '17', '18', '20'], prices: { 14: 5, 15: 5, 16: 7, 17: 7, 18: 9, 20: 10 }, extras: [{ id: 'valvula', name: 'Válvula', price: 5 }] },
@@ -261,7 +262,7 @@
         commissionRate: 30,
         services: db.settings.services || [],
         catalog: db.settings.catalog,
-        sheetUrl: db.settings.sheetUrl || '',
+        sheetUrl: '',
       },
       products: db.products,
       employees: isManager ? employees : employees.filter((item) => item.id === user.id),
@@ -357,25 +358,32 @@
   }
 
   async function archiveOldSales() {
-    const url = String(db.settings.sheetUrl || '').trim();
-    if (!url) return;
+    const url = SHEET_URL;
     const old = db.sales.filter((sale) => String(sale.date || '') < today());
     if (!old.length) return;
-    const sales = old.map((sale) => ({
-      id: sale.id,
-      date: sale.date,
-      time: sale.createdAt ? new Date(sale.createdAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : '',
-      employeeName: sale.employeeName || '',
-      serviceName: sale.serviceName || '',
-      rim: /^\d+$/.test(String(sale.rim || '')) ? `Rim ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : ''),
-      extraPatches: sale.extraPatches || 0,
-      extraValves: sale.extraValves || 0,
-      carModel: sale.carModel || '',
-      payment: (sale.payments || []).map((item) => `${item.method} ${item.amount}`).join(' + '),
-      total: sale.total || 0,
-      commissionAmount: sale.commissionAmount || 0,
-      voided: Boolean(sale.voided),
-    }));
+    const sales = old.map((sale) => {
+      const parts = String(sale.date || '').split('-').map(Number);
+      const weekday = parts[0] && parts[1] && parts[2]
+        ? ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][new Date(parts[0], parts[1] - 1, parts[2]).getDay()]
+        : '';
+      return {
+        id: sale.id,
+        date: sale.date,
+        weekday,
+        time: sale.createdAt ? new Date(sale.createdAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : '',
+        employeeName: sale.employeeName || '',
+        serviceName: sale.serviceName || '',
+        rim: /^\d+$/.test(String(sale.rim || '')) ? `Rim ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : ''),
+        extraPatches: sale.extraPatches || 0,
+        extraValves: sale.extraValves || 0,
+        carModel: sale.carModel || '',
+        description: sale.description || '',
+        payment: (sale.payments || []).map((item) => `${item.method} ${item.amount}`).join(' + '),
+        total: sale.total || 0,
+        commissionAmount: sale.commissionAmount || 0,
+        voided: Boolean(sale.voided),
+      };
+    });
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -439,13 +447,6 @@
         db.settings.currency = body.currency;
       }
       if ('demo' in body) db.settings.demo = Boolean(body.demo);
-      if ('sheetUrl' in body) {
-        const url = String(body.sheetUrl || '').trim();
-        if (url && !/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url)) {
-          fail(400, 'Pega el enlace de la aplicación web de Google, el que termina en /exec.');
-        }
-        db.settings.sheetUrl = url;
-      }
       if (body.catalog) db.settings.catalog = catalogFromBody(body.catalog);
       save();
       return payloadFor(user);
