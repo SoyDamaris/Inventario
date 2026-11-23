@@ -7,13 +7,14 @@
   const DB_KEY = 'go-services-db';
   const SID_KEY = 'go-services-sid';
   const PATCH_EXTRA = 2;
+  const VALVE_EXTRA = 2;
   const CURRENCIES = new Set(['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP']);
   const SECTION_DEFS = [
     { id: 'reparacion', name: 'Reparación', kind: 'rims', rims: ['14', '15', '16', '17', '18', '20'], prices: { 14: 5, 15: 5, 16: 7, 17: 7, 18: 9, 20: 10 }, extras: [{ id: 'valvula', name: 'Válvula', price: 5 }] },
     { id: 'balances', name: 'Balances', kind: 'rims', rims: ['14', '15', '16', '17', '18', '20'], prices: { 14: 4, 15: 4, 16: 5, 17: 5, 18: 5, 20: 5 } },
     { id: 'rotacion', name: 'Rotación', kind: 'rims', rims: ['14', '15', '16', '17', '18', '20'], prices: { 14: 3, 15: 3, 16: 4, 17: 4, 18: 4, 20: 4 } },
     { id: 'cambio', name: 'Cambio de llantas', kind: 'rims', rims: ['14', '15', '16', '17', '18', '19', '20'], prices: { 14: 3, 15: 3, 16: 4, 17: 4, 18: 4, 19: 5, 20: 5 } },
-    { id: 'lujo', name: 'Rines de lujo', kind: 'rims', rims: ['14', '15', '16', '17', '18', '19', '20'], prices: { 14: 7, 15: 7, 16: 10, 17: 10, 18: 10, 19: 10, 20: 10 } },
+    { id: 'lujo', name: 'Rims de lujo', kind: 'rims', rims: ['14', '15', '16', '17', '18', '19', '20'], prices: { 14: 7, 15: 7, 16: 10, 17: 10, 18: 10, 19: 10, 20: 10 } },
     { id: 'venta_llanta', name: 'Venta de llanta', kind: 'list' },
   ];
 
@@ -108,6 +109,8 @@
       name: user.name,
       username: user.username,
       role: user.role,
+      payMode: user.payMode === 'salario' ? 'salario' : 'porcentaje',
+      dailySalary: user.dailySalary || 0,
       commissionPercent: user.commissionPercent || 0,
       hourlyRate: user.hourlyRate || 0,
       active: user.active !== false,
@@ -258,6 +261,7 @@
         commissionRate: 30,
         services: db.settings.services || [],
         catalog: db.settings.catalog,
+        sheetUrl: db.settings.sheetUrl || '',
       },
       products: db.products,
       employees: isManager ? employees : employees.filter((item) => item.id === user.id),
@@ -318,20 +322,70 @@
     };
   }
 
+  function countExtra(value, label) {
+    const raw = String(value ?? '0').trim();
+    if (raw === '') return 0;
+    if (!/^\d+$/.test(raw)) fail(400, `${label} no son válidos.`);
+    const count = Number(raw);
+    if (count > 30) fail(400, `${label} no son válidos.`);
+    return count;
+  }
+
   async function employeeFromBody(body, { creating, current }) {
     const name = cleanText(body.name, 60);
     if (!name) fail(400, 'Escribe el nombre del empleado.');
     const password = String(body.password || '');
     if (creating && password.length < 4) fail(400, 'La contraseña debe tener al menos 4 caracteres.');
     if (password && (password.length < 4 || password.length > 72)) fail(400, 'La contraseña debe tener al menos 4 caracteres.');
+    const payMode = body.payMode === 'salario' ? 'salario' : 'porcentaje';
+    const dailySalary = payMode === 'salario'
+      ? cleanNumber(body.dailySalary, { min: 0.01, max: 100000000, label: 'El salario del día' })
+      : 0;
+    const commissionPercent = payMode === 'porcentaje'
+      ? cleanNumber(body.commissionPercent, { min: 0, max: 100, label: 'El porcentaje' })
+      : 0;
     return {
       name,
       username: cleanUsername(body.username),
-      commissionPercent: cleanNumber(body.commissionPercent, { min: 0, max: 100, label: 'El porcentaje' }),
-      hourlyRate: cleanNumber(body.hourlyRate || 0, { min: 0, max: 100000000, label: 'El valor por hora' }),
+      payMode,
+      dailySalary,
+      commissionPercent,
+      hourlyRate: 0,
       active: body.active !== false && body.active !== 'false',
       passwordHash: password ? await hashPassword(password) : current.passwordHash,
     };
+  }
+
+  async function archiveOldSales() {
+    const url = String(db.settings.sheetUrl || '').trim();
+    if (!url) return;
+    const old = db.sales.filter((sale) => String(sale.date || '') < today());
+    if (!old.length) return;
+    const sales = old.map((sale) => ({
+      id: sale.id,
+      date: sale.date,
+      time: sale.createdAt ? new Date(sale.createdAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : '',
+      employeeName: sale.employeeName || '',
+      serviceName: sale.serviceName || '',
+      rim: /^\d+$/.test(String(sale.rim || '')) ? `Rim ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : ''),
+      extraPatches: sale.extraPatches || 0,
+      extraValves: sale.extraValves || 0,
+      carModel: sale.carModel || '',
+      payment: (sale.payments || []).map((item) => `${item.method} ${item.amount}`).join(' + '),
+      total: sale.total || 0,
+      commissionAmount: sale.commissionAmount || 0,
+      voided: Boolean(sale.voided),
+    }));
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ sales }),
+    });
+    const text = await response.text();
+    if (!response.ok || !/"ok"\s*:\s*true/.test(text)) return;
+    const ids = new Set(old.map((sale) => sale.id));
+    db.sales = db.sales.filter((sale) => !ids.has(sale.id));
+    save();
   }
 
   async function handle(pathname, method, body) {
@@ -350,7 +404,10 @@
       return { ok: true };
     }
 
-    if (method === 'GET' && pathname === '/api/bootstrap') return payloadFor(requireUser());
+    if (method === 'GET' && pathname === '/api/bootstrap') {
+      try { await archiveOldSales(); } catch { /* si Google no responde, las ventas siguen aquí */ }
+      return payloadFor(requireUser());
+    }
 
     if (method === 'PUT' && pathname === '/api/me') {
       const user = requireUser();
@@ -382,6 +439,13 @@
         db.settings.currency = body.currency;
       }
       if ('demo' in body) db.settings.demo = Boolean(body.demo);
+      if ('sheetUrl' in body) {
+        const url = String(body.sheetUrl || '').trim();
+        if (url && !/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url)) {
+          fail(400, 'Pega el enlace de la aplicación web de Google, el que termina en /exec.');
+        }
+        db.settings.sheetUrl = url;
+      }
       if (body.catalog) db.settings.catalog = catalogFromBody(body.catalog);
       save();
       return payloadFor(user);
@@ -476,7 +540,16 @@
       const employee = findEmployee(decodeURIComponent(employeeId[1]));
       const next = await employeeFromBody(body, { creating: false, current: employee });
       uniqueUsername(next.username, employee.id);
-      Object.assign(employee, { name: next.name, username: next.username, commissionPercent: next.commissionPercent, hourlyRate: next.hourlyRate, active: next.active, passwordHash: next.passwordHash });
+      Object.assign(employee, {
+        name: next.name,
+        username: next.username,
+        payMode: next.payMode,
+        dailySalary: next.dailySalary,
+        commissionPercent: next.commissionPercent,
+        hourlyRate: next.hourlyRate,
+        active: next.active,
+        passwordHash: next.passwordHash,
+      });
       save();
       return payloadFor(user);
     }
@@ -493,9 +566,13 @@
       let description = '';
       let rim = '';
       let extraPatches = 0;
+      let extraValves = 0;
       if (sectionId === 'otros') {
         description = cleanText(body.description, 300);
         if (!description) fail(400, 'Describe lo que se vendió.');
+        if (String(body.customPrice ?? '').trim() !== '') {
+          catalogPrice = cleanNumber(body.customPrice, { min: 0, label: 'El valor del trabajo' });
+        }
       } else {
         const catalog = normalizeCatalog(db.settings.catalog);
         const section = catalog.sections.find((item) => item.id === sectionId);
@@ -509,19 +586,8 @@
             serviceName = `${section.name} · ${extraOption.name}`;
           } else if ((section.rims || []).includes(rim)) {
             catalogPrice = Number(section.prices[rim]) || 0;
-            serviceName = `${section.name} · Rin ${rim}`;
-          } else fail(400, 'Elige el rin.');
-          if (section.id === 'reparacion' && !extraOption) {
-            const rawPatches = String(body.extraPatches ?? '0').trim();
-            if (!/^\d+$/.test(rawPatches) || Number(rawPatches) > 30) fail(400, 'Los parches extra no son válidos.');
-            extraPatches = Number(rawPatches);
-            catalogPrice = roundMoney(catalogPrice + extraPatches * PATCH_EXTRA);
-            if (extraPatches > 0) {
-              const label = `${extraPatches} parche${extraPatches === 1 ? '' : 's'} extra`;
-              serviceName = `${serviceName} · ${label}`;
-              description = label;
-            }
-          }
+            serviceName = `${section.name} · Rim ${rim}`;
+          } else fail(400, 'Elige el rim.');
         } else {
           const item = (section.items || []).find((entry) => entry.id === String(body.itemId || ''));
           if (!item) fail(400, 'Elige la llanta.');
@@ -529,6 +595,16 @@
           serviceName = `Venta de llanta · ${item.name}`;
         }
         if (!(catalogPrice > 0)) fail(400, 'Esa opción todavía no tiene precio.');
+      }
+      extraPatches = countExtra(body.extraPatches, 'Los parches');
+      extraValves = countExtra(body.extraValves, 'Las válvulas');
+      const bits = [];
+      if (extraPatches > 0) bits.push(`${extraPatches} parche${extraPatches === 1 ? '' : 's'}`);
+      if (extraValves > 0) bits.push(`${extraValves} válvula${extraValves === 1 ? '' : 's'}`);
+      catalogPrice = roundMoney(catalogPrice + extraPatches * PATCH_EXTRA + extraValves * VALVE_EXTRA);
+      if (bits.length) {
+        serviceName = `${serviceName} · ${bits.join(' · ')}`;
+        description = [description, bits.join(', ')].filter(Boolean).join('. ');
       }
       const methods = new Set(['yape', 'efectivo', 'transferencia']);
       const payments = Array.isArray(body.payments) ? body.payments : [];
@@ -542,6 +618,8 @@
       const paid = roundMoney(cleanPayments.reduce((sum, item) => sum + item.amount, 0));
       if (catalogPrice > 0 && Math.abs(paid - catalogPrice) > 0.009) fail(400, 'Los montos deben sumar el precio del servicio.');
       const total = catalogPrice > 0 ? catalogPrice : paid;
+      const payMode = employee.payMode === 'salario' ? 'salario' : 'porcentaje';
+      const percent = payMode === 'salario' ? 0 : Number(employee.commissionPercent) || 0;
       const sale = {
         id: uid('ven'),
         employeeId: employee.id,
@@ -550,6 +628,7 @@
         serviceName,
         rim,
         extraPatches,
+        extraValves,
         description,
         carModel,
         payments: cleanPayments,
@@ -558,8 +637,9 @@
         quantity: 1,
         unitPrice: total,
         total,
-        commissionPercent: 30,
-        commissionAmount: roundMoney(total * 30 / 100),
+        payMode,
+        commissionPercent: percent,
+        commissionAmount: roundMoney(total * percent / 100),
         date: today(),
         createdAt: new Date().toISOString(),
         voided: false,

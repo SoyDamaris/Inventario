@@ -1,4 +1,5 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -11,6 +12,7 @@ const DATA_DIR = path.join(ROOT, 'data');
 const DB_PATH = path.join(DATA_DIR, 'db.json');
 const CURRENCIES = new Set(['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP']);
 const PATCH_EXTRA = 2;
+const VALVE_EXTRA = 2;
 const SECTION_DEFS = [
   {
     id: 'reparacion',
@@ -43,7 +45,7 @@ const SECTION_DEFS = [
   },
   {
     id: 'lujo',
-    name: 'Rines de lujo',
+    name: 'Rims de lujo',
     kind: 'rims',
     rims: ['14', '15', '16', '17', '18', '19', '20'],
     prices: { 14: 7, 15: 7, 16: 10, 17: 10, 18: 10, 19: 10, 20: 10 },
@@ -134,6 +136,8 @@ function publicUser(user) {
     name: user.name,
     username: user.username,
     role: user.role,
+    payMode: user.payMode === 'salario' ? 'salario' : 'porcentaje',
+    dailySalary: user.dailySalary || 0,
     commissionPercent: user.commissionPercent || 0,
     hourlyRate: user.hourlyRate || 0,
     active: user.active !== false,
@@ -503,6 +507,7 @@ function payloadFor(user) {
       commissionRate: commissionRate(),
       services: db.settings.services,
       catalog: db.settings.catalog,
+      sheetUrl: db.settings.sheetUrl || '',
     },
     products: db.products,
     employees: isManager ? employees : employees.filter((item) => item.id === user.id),
@@ -622,6 +627,104 @@ function readBody(req) {
   });
 }
 
+function extraCount(value, label) {
+  const raw = String(value ?? '0').trim();
+  if (raw === '') return 0;
+  if (!/^\d+$/.test(raw)) throw httpError(400, `${label} no son válidos.`);
+  const count = Number(raw);
+  if (count > 30) throw httpError(400, `${label} no son válidos.`);
+  return count;
+}
+
+function withAddons(serviceName, description, catalogPrice, extraPatches, extraValves) {
+  const bits = [];
+  if (extraPatches > 0) bits.push(`${extraPatches} parche${extraPatches === 1 ? '' : 's'}`);
+  if (extraValves > 0) bits.push(`${extraValves} válvula${extraValves === 1 ? '' : 's'}`);
+  const addons = roundMoney(extraPatches * PATCH_EXTRA + extraValves * VALVE_EXTRA);
+  return {
+    serviceName: bits.length ? `${serviceName} · ${bits.join(' · ')}` : serviceName,
+    description: [description, bits.join(', ')].filter(Boolean).join('. '),
+    catalogPrice: roundMoney(Number(catalogPrice) + addons),
+  };
+}
+
+function cleanSheetUrl(value) {
+  const url = String(value || '').trim();
+  if (!url) return '';
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url)) {
+    throw httpError(400, 'Pega el enlace de la aplicación web de Google, el que termina en /exec.');
+  }
+  return url;
+}
+
+function requestText(url, method, body, redirects) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const req = https.request({
+      method,
+      hostname: target.hostname,
+      path: `${target.pathname}${target.search}`,
+      headers: body ? { 'Content-Type': 'text/plain;charset=utf-8', 'Content-Length': Buffer.byteLength(body) } : {},
+    }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects > 0) {
+        res.resume();
+        resolve(requestText(new URL(res.headers.location, url).toString(), 'GET', null, redirects - 1));
+        return;
+      }
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.setTimeout(12000, () => req.destroy(new Error('Google Sheets no respondió.')));
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+function sheetSale(sale) {
+  const time = sale.createdAt ? new Date(sale.createdAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : '';
+  const payment = Array.isArray(sale.payments) ? sale.payments.map((item) => `${item.method} ${item.amount}`).join(' + ') : '';
+  const rim = /^\d+$/.test(String(sale.rim || '')) ? `Rim ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : '');
+  return {
+    id: sale.id,
+    date: sale.date,
+    time,
+    employeeName: sale.employeeName || '',
+    serviceName: sale.serviceName || '',
+    rim,
+    extraPatches: sale.extraPatches || 0,
+    extraValves: sale.extraValves || 0,
+    carModel: sale.carModel || '',
+    payment,
+    total: sale.total || 0,
+    commissionAmount: sale.commissionAmount || 0,
+    voided: Boolean(sale.voided),
+  };
+}
+
+let archiving = null;
+
+function archiveOldSales() {
+  if (archiving) return archiving;
+  archiving = archiveOldSalesNow().finally(() => { archiving = null; });
+  return archiving;
+}
+
+async function archiveOldSalesNow() {
+  const url = String(db.settings.sheetUrl || '').trim();
+  if (!url) return;
+  const old = db.sales.filter((sale) => String(sale.date || '') < today());
+  if (!old.length) return;
+  const response = await requestText(url, 'POST', JSON.stringify({ sales: old.map(sheetSale) }), 5);
+  if (response.status < 200 || response.status >= 300 || !/"ok"\s*:\s*true/.test(response.body)) {
+    throw new Error('No se pudieron guardar las ventas en Google Sheets.');
+  }
+  const ids = new Set(old.map((sale) => sale.id));
+  db.sales = db.sales.filter((sale) => !ids.has(sale.id));
+  await persist();
+}
+
 async function handleApi(req, res, pathname) {
   checkOrigin(req);
   const body = req.method === 'GET' || req.method === 'HEAD' ? {} : await readBody(req);
@@ -655,7 +758,9 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === 'GET' && pathname === '/api/bootstrap') {
-    return send(res, 200, payloadFor(requireUser(req)));
+    const user = requireUser(req);
+    try { await archiveOldSales(); } catch (error) { console.error(error.message); }
+    return send(res, 200, payloadFor(user));
   }
 
   if (req.method === 'PUT' && pathname === '/api/me') {
@@ -692,6 +797,7 @@ async function handleApi(req, res, pathname) {
       db.settings.currency = body.currency;
     }
     if ('demo' in body) db.settings.demo = Boolean(body.demo);
+    if ('sheetUrl' in body) db.settings.sheetUrl = cleanSheetUrl(body.sheetUrl);
     if (body.catalog) db.settings.catalog = catalogFromBody(body.catalog);
     await persist();
     return send(res, 200, payloadFor(user));
@@ -834,6 +940,8 @@ async function handleApi(req, res, pathname) {
     employee.username = next.username;
     employee.commissionPercent = next.commissionPercent;
     employee.hourlyRate = next.hourlyRate;
+    employee.payMode = next.payMode;
+    employee.dailySalary = next.dailySalary;
     employee.active = next.active;
     if (next.passwordHash) employee.passwordHash = next.passwordHash;
     await persist();
@@ -881,9 +989,13 @@ async function handleApi(req, res, pathname) {
     let description = '';
     let rim = '';
     let extraPatches = 0;
+    let extraValves = 0;
     if (sectionId === 'otros') {
       description = cleanText(body.description, 300);
       if (!description) throw httpError(400, 'Describe lo que se vendió.');
+      if (String(body.customPrice ?? '').trim() !== '') {
+        catalogPrice = cleanNumber(body.customPrice, { min: 0, max: 1000000000, label: 'El valor del trabajo' });
+      }
     } else {
       const catalog = normalizeCatalog(db.settings.catalog);
       const section = catalog.sections.find((item) => item.id === sectionId);
@@ -897,21 +1009,9 @@ async function handleApi(req, res, pathname) {
           serviceName = `${section.name} · ${extraOption.name}`;
         } else if ((section.rims || []).includes(rim)) {
           catalogPrice = Number(section.prices[rim]) || 0;
-          serviceName = `${section.name} · Rin ${rim}`;
+          serviceName = `${section.name} · Rim ${rim}`;
         } else {
-          throw httpError(400, 'Elige el rin.');
-        }
-        if (section.id === 'reparacion' && !extraOption) {
-          const rawPatches = String(body.extraPatches ?? '0').trim();
-          if (!/^\d+$/.test(rawPatches)) throw httpError(400, 'Los parches extra no son válidos.');
-          extraPatches = Number(rawPatches);
-          if (extraPatches > 30) throw httpError(400, 'Los parches extra no son válidos.');
-          catalogPrice = roundMoney(catalogPrice + extraPatches * PATCH_EXTRA);
-          if (extraPatches > 0) {
-            const label = `${extraPatches} parche${extraPatches === 1 ? '' : 's'} extra`;
-            serviceName = `${serviceName} · ${label}`;
-            description = label;
-          }
+          throw httpError(400, 'Elige el rim.');
         }
       } else if (section.kind === 'single') {
         catalogPrice = Number(section.price) || 0;
@@ -923,6 +1023,12 @@ async function handleApi(req, res, pathname) {
       }
       if (!(catalogPrice > 0)) throw httpError(400, 'Esa opción todavía no tiene precio.');
     }
+    extraPatches = extraCount(body.extraPatches, 'Los parches');
+    extraValves = extraCount(body.extraValves, 'Las válvulas');
+    const priced = withAddons(serviceName, description, catalogPrice, extraPatches, extraValves);
+    serviceName = priced.serviceName;
+    description = priced.description;
+    catalogPrice = priced.catalogPrice;
     const methods = new Set(['yape', 'efectivo', 'transferencia']);
     const payments = Array.isArray(body.payments) ? body.payments : [];
     if (payments.length < 1 || payments.length > 2) throw httpError(400, 'Elige uno o dos métodos de pago.');
@@ -945,7 +1051,8 @@ async function handleApi(req, res, pathname) {
       throw httpError(400, 'Los montos deben sumar el precio del servicio.');
     }
     const total = catalogPrice > 0 ? catalogPrice : paid;
-    const percent = commissionRate();
+    const payMode = employee.payMode === 'salario' ? 'salario' : 'porcentaje';
+    const percent = payMode === 'salario' ? 0 : Number(employee.commissionPercent) || 0;
     const sale = {
       id: uid('ven'),
       employeeId: employee.id,
@@ -954,6 +1061,7 @@ async function handleApi(req, res, pathname) {
       serviceName,
       rim,
       extraPatches,
+      extraValves,
       description,
       carModel,
       payments: cleanPayments,
@@ -962,6 +1070,7 @@ async function handleApi(req, res, pathname) {
       quantity: 1,
       unitPrice: total,
       total,
+      payMode,
       commissionPercent: percent,
       commissionAmount: roundMoney(total * percent / 100),
       date: today(),
@@ -1078,11 +1187,20 @@ function employeeFromBody(body, { creating, current }) {
   if (password && (password.length < 4 || password.length > 72)) {
     throw httpError(400, 'La contraseña debe tener al menos 4 caracteres.');
   }
+  const payMode = body.payMode === 'salario' ? 'salario' : 'porcentaje';
+  const dailySalary = payMode === 'salario'
+    ? cleanNumber(body.dailySalary, { min: 0.01, max: 100000000, label: 'El salario del día' })
+    : 0;
+  const commissionPercent = payMode === 'porcentaje'
+    ? cleanNumber(body.commissionPercent, { min: 0, max: 100, label: 'El porcentaje' })
+    : 0;
   return {
     name,
     username: cleanUsername(body.username),
-    commissionPercent: cleanNumber(body.commissionPercent, { min: 0, max: 100, label: 'El porcentaje' }),
-    hourlyRate: cleanNumber(body.hourlyRate || 0, { min: 0, max: 100000000, label: 'El valor por hora' }),
+    payMode,
+    dailySalary,
+    commissionPercent,
+    hourlyRate: 0,
     active: body.active !== false && body.active !== 'false',
     passwordHash: password ? hashPassword(password) : current ? current.passwordHash : '',
   };
