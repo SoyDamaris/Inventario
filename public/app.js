@@ -823,9 +823,6 @@ function optionalPrice(value, label) {
   return requireQty(value, label);
 }
 
-const EXCEL_MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-const EXCEL_WEEKDAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-
 function excelCell(value, type, style) {
   const kind = type || (typeof value === 'number' ? 'Number' : 'String');
   const text = kind === 'Number' ? String(Number(value) || 0) : esc(value ?? '');
@@ -879,82 +876,6 @@ function exportInventory() {
   showToast('Excel del inventario descargado.');
 }
 
-function saleClock(sale) {
-  if (!sale.createdAt) return '';
-  const date = new Date(sale.createdAt);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
-}
-
-function saleExcelRow(sale, weekday) {
-  return {
-    cells: [
-      { value: weekday },
-      { value: formatDate(sale.date) },
-      { value: saleClock(sale) },
-      { value: sale.employeeName || '' },
-      { value: sale.serviceName || sale.productName || '' },
-      { value: /^\d+$/.test(String(sale.rim || '')) ? `Rim ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : '') },
-      { value: Number(sale.extraPatches) || 0, type: 'Number' },
-      { value: Number(sale.extraValves) || 0, type: 'Number' },
-      { value: sale.carModel || '' },
-      { value: sale.description || '' },
-      { value: paymentText(sale) === '—' ? '' : paymentText(sale) },
-      { value: Number(sale.total) || 0, type: 'Number' },
-      { value: sale.voided || sale.payMode === 'salario' ? 0 : Number(sale.commissionAmount) || 0, type: 'Number' },
-      { value: sale.voided ? 'Anulada' : 'Registrada' },
-    ],
-  };
-}
-
-function exportSales() {
-  const year = String(state.day || todayISO()).slice(0, 4);
-  const sales = state.sales.filter((sale) => String(sale.date || '').startsWith(`${year}-`));
-  const headers = ['Día', 'Fecha', 'Hora', 'Empleado', 'Servicio', 'Rim', 'Parches', 'Válvulas', 'Modelo', 'Descripción', 'Pago', 'Total', 'Porcentaje', 'Estado'];
-  const sheets = EXCEL_MONTHS.map((name, index) => {
-    const month = String(index + 1).padStart(2, '0');
-    const last = new Date(Number(year), index + 1, 0).getDate();
-    const rows = [];
-    for (let day = 1; day <= last; day += 1) {
-      const iso = `${year}-${month}-${String(day).padStart(2, '0')}`;
-      const weekday = EXCEL_WEEKDAYS[new Date(Number(year), index, day).getDay()];
-      const ofDay = sales
-        .filter((sale) => sale.date === iso)
-        .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
-      if (!ofDay.length) {
-        rows.push({
-          style: 'day',
-          cells: [
-            { value: weekday },
-            { value: formatDate(iso) },
-            { value: '' },
-            { value: '' },
-            { value: 'Sin ventas' },
-            { value: '' },
-            { value: '' },
-            { value: '' },
-            { value: '' },
-            { value: '' },
-            { value: '' },
-            { value: 0, type: 'Number' },
-            { value: 0, type: 'Number' },
-            { value: '' },
-          ],
-        });
-        continue;
-      }
-      ofDay.forEach((sale, position) => {
-        const row = saleExcelRow(sale, weekday);
-        if (position === 0) row.style = 'day';
-        rows.push(row);
-      });
-    }
-    return { name, headers, rows };
-  });
-  downloadWorkbook(`Ventas ${year}.xls`, sheets);
-  showToast(`Excel de ${year} descargado. Cada hoja es un mes.`);
-}
-
 function paymentText(sale) {
   if (!Array.isArray(sale.payments) || !sale.payments.length) return '—';
   return sale.payments.map((item) => `${METHOD_LABEL[item.method] || item.method} ${money(item.amount)}`).join(' + ');
@@ -1005,7 +926,6 @@ function salesRegister() {
   return `${manager ? demoBanner() : ''}
     <p class="lead">Elige la sección y el rim. Parches y válvulas suman ${money(2)} cada uno, en cualquier venta. Abajo quedan las ventas de este día.</p>
     <div class="section-head"><h2>${esc(dayName(state.day))}</h2>${daySelect()}</div>
-    <div class="toolbar"><button class="btn ghost" type="button" data-action="export-sales">Exportar Excel</button></div>
     ${sheetNote}
     ${sections}
     <div class="stats">${summary || `<div class="stat accent"><span>Pago de hoy</span><strong>${money(0)}</strong></div>`}</div>
@@ -1348,8 +1268,6 @@ async function onClick(event) {
       render();
     } else if (action === 'export-inventory') {
       exportInventory();
-    } else if (action === 'export-sales') {
-      exportSales();
     } else if (action === 'new-product') {
       openProduct(null);
     } else if (action === 'edit-product') {
