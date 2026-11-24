@@ -168,7 +168,8 @@ img { max-width: 100%; }
 .content { padding: 8px 28px 56px; max-width: 1180px; }
 .lead { margin: 4px 0 16px; color: var(--muted); }
 .muted { color: var(--muted); }
-.date { margin: 0 0 12px; color: var(--muted); text-transform: capitalize; }
+.date { margin: 0 0 12px; color: var(--muted); }
+.date::first-letter { text-transform: uppercase; }
 
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .stat, .person, .alert, .team-card, .card, .account {

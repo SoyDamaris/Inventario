@@ -181,7 +181,7 @@
         if (def.kind === 'rims') {
           const prices = {};
           def.rims.forEach((rim) => {
-            prices[rim] = cleanNumber(current.prices ? current.prices[rim] : def.prices[rim], { min: 0, label: `El precio del rin ${rim}` });
+            prices[rim] = cleanNumber(current.prices ? current.prices[rim] : def.prices[rim], { min: 0, label: `El precio del Rim ${rim}` });
           });
           return {
             id: def.id,
@@ -602,7 +602,7 @@
           } else if ((section.rims || []).includes(rim)) {
             catalogPrice = Number(section.prices[rim]) || 0;
             serviceName = `${section.name} · Rim ${rim}`;
-          } else fail(400, 'Elige el rim.');
+          } else fail(400, 'Elige el Rim.');
         } else {
           const item = (section.items || []).find((entry) => entry.id === String(body.itemId || ''));
           if (!item) fail(400, 'Elige la llanta.');

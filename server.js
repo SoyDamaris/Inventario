@@ -455,7 +455,7 @@ function catalogFromBody(body) {
         const prices = {};
         def.rims.forEach((rim) => {
           const raw = current.prices ? current.prices[rim] : def.prices[rim];
-          prices[rim] = cleanNumber(raw || 0, { min: 0, max: 1000000000, label: `El precio del rin ${rim}` });
+          prices[rim] = cleanNumber(raw || 0, { min: 0, max: 1000000000, label: `El precio del Rim ${rim}` });
         });
         const extras = (def.extras || []).map((extra) => {
           const saved = (current.extras || []).find((item) => item.id === extra.id) || {};
@@ -1027,7 +1027,7 @@ async function handleApi(req, res, pathname) {
           catalogPrice = Number(section.prices[rim]) || 0;
           serviceName = `${section.name} · Rim ${rim}`;
         } else {
-          throw httpError(400, 'Elige el rim.');
+          throw httpError(400, 'Elige el Rim.');
         }
       } else if (section.kind === 'single') {
         catalogPrice = Number(section.price) || 0;

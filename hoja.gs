@@ -1,7 +1,7 @@
 var FOLDER = 'GO Services';
 var MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-var WEEKDAYS = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
-var HEADERS = ['Id', 'Dia', 'Semana', 'Fecha', 'Hora', 'Empleado', 'Servicio', 'Rim', 'Parches', 'Valvulas', 'Modelo', 'Descripcion', 'Pago', 'Total', 'Porcentaje', 'Estado'];
+var WEEKDAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+var HEADERS = ['Id', 'Día', 'Semana', 'Fecha', 'Hora', 'Empleado', 'Servicio', 'Rim', 'Parches', 'Válvulas', 'Modelo', 'Descripción', 'Pago', 'Total', 'Porcentaje', 'Estado'];
 
 function doPost(e) {
   var raw = (e && e.postData && e.postData.contents) ? e.postData.contents : '{}';
@@ -116,6 +116,8 @@ function monthSheet_(book, monthIndex) {
     sheet.setFrozenRows(1);
     orderMonths_(book);
     sheet = book.getSheetByName(name);
+  } else {
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
   }
   var blank = book.getSheetByName('Hoja 1');
   if (blank && book.getSheets().length > 1 && blank.getLastRow() === 0) book.deleteSheet(blank);

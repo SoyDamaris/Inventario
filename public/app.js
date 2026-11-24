@@ -684,7 +684,7 @@ function accounts() {
         <label class="field"><span>Moneda</span><select name="currency">${['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP'].map((code) => `<option ${code === state.settings.currency ? 'selected' : ''}>${code}</option>`).join('')}</select></label>
       </div>
       <div class="section-head"><h2>Precios del registro de ventas</h2></div>
-      <p class="lead">Cada rim y cada llanta tienen su precio. En cualquier venta, cada parche y cada válvula suman ${money(2)}.</p>
+      <p class="lead">Cada Rim y cada llanta tienen su precio. En cualquier venta, cada parche y cada válvula suman ${money(2)}.</p>
       ${catalogPriceEditor()}
       <button class="btn" type="submit">Guardar negocio</button>
     </form>
@@ -813,7 +813,7 @@ function catalogPriceEditor() {
         <input type="hidden" name="tireCount" value="${items.length}">
         <button class="btn ghost small" type="button" data-action="add-tire">Agregar llanta</button>`;
     }
-    const note = section.id === 'reparacion' ? '<p class="muted">El precio de cada rim es la reparación. La válvula de la lista va aparte. Los parches y las válvulas adicionales se suman al registrar, a 2 dólares cada uno.</p>' : '';
+    const note = section.id === 'reparacion' ? '<p class="muted">El precio de cada Rim es la reparación. La válvula de la lista va aparte. Los parches y las válvulas adicionales se suman al registrar, a 2 dólares cada uno.</p>' : '';
     return `<div class="sale-section"><h3>${esc(section.name)}</h3>${note}${fields}</div>`;
   }).join('');
 }
@@ -924,7 +924,7 @@ function salesRegister() {
       </tr>`).join('')}</tbody>
     </table></div>`     : '<div class="empty">No hay ventas en este día.</div>';
   return `${manager ? demoBanner() : ''}
-    <p class="lead">Elige la sección y el rim. Parches y válvulas suman ${money(2)} cada uno, en cualquier venta. Abajo quedan las ventas de este día.</p>
+    <p class="lead">Elige la sección y el Rim. Parches y válvulas suman ${money(2)} cada uno, en cualquier venta. Abajo quedan las ventas de este día.</p>
     <div class="section-head"><h2>${esc(dayName(state.day))}</h2>${daySelect()}</div>
     ${sheetNote}
     ${sections}
@@ -956,10 +956,10 @@ function salesSections(manager) {
         : `<p class="muted">${manager ? 'Agrega cada llanta en Cuentas, con su precio.' : 'La gerencia todavía no cargó las llantas.'}</p>`;
     }
     const note = section.id === 'reparacion'
-      ? `<p class="muted">Elige el rim. La válvula de la lista se cobra aparte. Abajo puedes sumar parches y válvulas, a ${money(2)} cada uno.</p>`
+      ? `<p class="muted">Elige el Rim. La válvula de la lista se cobra aparte. Abajo puedes sumar parches y válvulas, a ${money(2)} cada uno.</p>`
       : (section.id === 'lujo'
         ? '<p class="muted">Rim 14 y 15, y del 16 al 20.</p>'
-        : (section.id === 'venta_llanta' ? '<p class="muted">Elige la llanta de la lista.</p>' : '<p class="muted">Elige el rim.</p>'));
+        : (section.id === 'venta_llanta' ? '<p class="muted">Elige la llanta de la lista.</p>' : '<p class="muted">Elige el Rim.</p>'));
     return `<div class="sale-section"><h3>${esc(section.name)}</h3>${note}${body}</div>`;
   }).join('');
   return `${blocks}<div class="sale-section"><h3>Otros</h3><div class="rim-grid"><button class="btn ghost" type="button" data-action="pick-option" data-section="otros">Describir otra venta</button></div></div>`;
@@ -1550,7 +1550,7 @@ async function onSubmit(event) {
       const sections = draft.sections.map((section) => {
         if (section.kind === 'rims') {
           const prices = {};
-          (section.rims || []).forEach((rim) => { prices[rim] = optionalPrice(section.prices[rim], `El precio del rim ${rim}`); });
+          (section.rims || []).forEach((rim) => { prices[rim] = optionalPrice(section.prices[rim], `El precio del Rim ${rim}`); });
           const extras = (section.extras || []).map((extra) => ({
             id: extra.id,
             name: extra.name,
