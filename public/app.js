@@ -5,8 +5,14 @@ document.addEventListener('keydown', (event) => {
   if (!(event.ctrlKey || event.metaKey)) return;
   if (event.key === '+' || event.key === '-' || event.key === '=' || event.key === '_' || event.key === '0') event.preventDefault();
 });
+function blockPinch(event) {
+  if (event.touches && event.touches.length > 1) event.preventDefault();
+  if (event.scale && event.scale !== 1) event.preventDefault();
+}
+document.addEventListener('touchstart', blockPinch, { passive: false });
+document.addEventListener('touchmove', blockPinch, { passive: false });
 ['gesturestart', 'gesturechange', 'gestureend'].forEach((name) => {
-  document.addEventListener(name, (event) => event.preventDefault());
+  document.addEventListener(name, (event) => event.preventDefault(), { passive: false });
 });
 
 const state = {
@@ -524,10 +530,10 @@ function inventory() {
   const rows = products.map((product) => {
     const status = statusOf(product);
     return `<tr>
-      <td><strong>${esc(product.name)}</strong></td>
-      <td>${esc(categoryName(product))}</td>
-      <td>${money(product.price)}</td>
-      <td>
+      <td data-label="Producto"><strong>${esc(product.name)}</strong></td>
+      <td data-label="Categoría">${esc(categoryName(product))}</td>
+      <td data-label="Precio">${money(product.price)}</td>
+      <td data-label="Existencia">
         <form data-action="save-stock" data-id="${esc(product.id)}">
           <div class="stock-cell">
             <input name="stock" inputmode="decimal" value="${esc(product.stock)}" aria-label="Existencia de ${esc(product.name)}">
@@ -536,9 +542,9 @@ function inventory() {
           <input type="hidden" name="note" value="${esc(product.note || '')}">
         </form>
       </td>
-      <td><span class="badge ${status.key}">${status.label}</span></td>
-      <td>${esc(product.note || product.description || '—')}</td>
-      <td class="actions">
+      <td data-label="Estado"><span class="badge ${status.key}">${status.label}</span></td>
+      <td data-label="Nota">${esc(product.note || product.description || '—')}</td>
+      <td class="actions" data-label="Acciones">
         <button class="btn ghost small" type="button" data-action="edit-product" data-id="${esc(product.id)}">Editar</button>
         <button class="btn danger small" type="button" data-action="delete-product" data-id="${esc(product.id)}">Quitar</button>
       </td>
@@ -985,15 +991,15 @@ function salesRegister() {
         <th>Servicio</th><th>Modelo</th><th>Descripción</th><th>Pago</th><th>Total</th><th>Porcentaje</th><th></th>
       </tr></thead>
       <tbody>${rows.map((sale) => `<tr class="${sale.voided ? 'void' : ''}">
-        <td>${esc(formatDate(sale.date))}</td>
-        ${manager ? `<td>${esc(sale.employeeName || '')}</td>` : ''}
-        <td>${esc(sale.serviceName || sale.productName || '—')}</td>
-        <td>${esc(sale.carModel || '—')}</td>
-        <td>${esc(sale.description || '—')}</td>
-        <td>${paymentText(sale)}</td>
-        <td>${money(sale.total)}</td>
-        <td>${money(sale.voided || sale.payMode === 'salario' ? 0 : sale.commissionAmount)}</td>
-        <td>${sale.voided ? '<small>Anulada</small>' : `<button class="btn ghost small" type="button" data-action="delete-sale" data-id="${esc(sale.id)}">Quitar</button>`}</td>
+        <td data-label="Fecha">${esc(formatDate(sale.date))}</td>
+        ${manager ? `<td data-label="Empleado">${esc(sale.employeeName || '')}</td>` : ''}
+        <td data-label="Servicio">${esc(sale.serviceName || sale.productName || '—')}</td>
+        <td data-label="Modelo">${esc(sale.carModel || '—')}</td>
+        <td data-label="Descripción">${esc(sale.description || '—')}</td>
+        <td data-label="Pago">${paymentText(sale)}</td>
+        <td data-label="Total">${money(sale.total)}</td>
+        <td data-label="Porcentaje">${money(sale.voided || sale.payMode === 'salario' ? 0 : sale.commissionAmount)}</td>
+        <td class="actions" data-label="Acciones">${sale.voided ? '<small>Anulada</small>' : `<button class="btn ghost small" type="button" data-action="delete-sale" data-id="${esc(sale.id)}">Quitar</button>`}</td>
       </tr>`).join('')}</tbody>
     </table></div>`     : '<div class="empty">No hay ventas en este día.</div>';
   return `${manager ? demoBanner() : ''}
