@@ -1,3 +1,14 @@
+document.addEventListener('wheel', (event) => {
+  if (event.ctrlKey) event.preventDefault();
+}, { passive: false });
+document.addEventListener('keydown', (event) => {
+  if (!(event.ctrlKey || event.metaKey)) return;
+  if (event.key === '+' || event.key === '-' || event.key === '=' || event.key === '_' || event.key === '0') event.preventDefault();
+});
+['gesturestart', 'gesturechange', 'gestureend'].forEach((name) => {
+  document.addEventListener(name, (event) => event.preventDefault());
+});
+
 const state = {
   booting: true,
   user: null,
@@ -1545,7 +1556,7 @@ async function onSubmit(event) {
       });
       const paid = roundMoney(payments.reduce((sum, item) => sum + item.amount, 0));
       if (quote.total > 0 && Math.abs(paid - quote.total) > 0.009) throw new Error('Los montos deben sumar el precio de la opción.');
-      await api('/api/sales', {
+      const saved = await api('/api/sales', {
         method: 'POST',
         body: {
           sectionId: draft.sectionId,
@@ -1561,7 +1572,7 @@ async function onSubmit(event) {
         },
       });
       await refresh();
-      showToast('Venta registrada.');
+      showToast(saved.sheetSaved ? 'Venta registrada en Google Sheets.' : 'Venta registrada. Google todavía no la guardó.');
       return;
     }
     if (action === 'save-shift') {

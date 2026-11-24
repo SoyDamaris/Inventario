@@ -18,7 +18,7 @@ if (typeof tls.getCACertificates === 'function') {
 const CURRENCIES = new Set(['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP']);
 const PATCH_EXTRA = 2;
 const VALVE_EXTRA = 2;
-const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyrV4sKIDKSXOrPnSnVsLx5NBgRwvytvtEzcbenHKi4Yk85VfdXinjTeQlxKmESFgE/exec';
+const SHEET_URL = 'https://script.google.com/macros/s/AKfycbxH0jHhTYSbOi_n6Rqgu4AWC5JpejWLHjY2ieU3s8CBpJne_mwO3uJXQvK_dRyQGF33/exec';
 const SECTION_DEFS = [
   {
     id: 'reparacion',
@@ -714,17 +714,32 @@ function archiveOldSales() {
   return archiving;
 }
 
+function sheetAccepted(response) {
+  return response.status >= 200 && response.status < 300 && /"ok"\s*:\s*true/.test(response.body);
+}
+
+async function pushSales(sales) {
+  if (!sales.length) return true;
+  const response = await requestText(SHEET_URL, 'POST', JSON.stringify({ sales: sales.map(sheetSale) }), 5);
+  return sheetAccepted(response);
+}
+
 async function archiveOldSalesNow() {
-  const url = SHEET_URL;
-  const old = db.sales.filter((sale) => String(sale.date || '') < today());
-  if (!old.length) return;
-  const response = await requestText(url, 'POST', JSON.stringify({ sales: old.map(sheetSale) }), 5);
-  if (response.status < 200 || response.status >= 300 || !/"ok"\s*:\s*true/.test(response.body)) {
-    throw new Error('No se pudieron guardar las ventas en Google Sheets.');
+  const pending = db.sales.filter((sale) => !sale.sheetSynced);
+  let changed = false;
+  if (pending.length) {
+    const ok = await pushSales(pending);
+    if (!ok) throw new Error('No se pudieron guardar las ventas en Google Sheets.');
+    pending.forEach((sale) => { sale.sheetSynced = true; });
+    changed = true;
   }
-  const ids = new Set(old.map((sale) => sale.id));
-  db.sales = db.sales.filter((sale) => !ids.has(sale.id));
-  await persist();
+  const todayStr = today();
+  const kept = db.sales.filter((sale) => !sale.sheetSynced || String(sale.date || '') >= todayStr);
+  if (kept.length !== db.sales.length) {
+    db.sales = kept;
+    changed = true;
+  }
+  if (changed) await persist();
 }
 
 async function handleApi(req, res, pathname) {
@@ -1092,7 +1107,19 @@ async function handleApi(req, res, pathname) {
       note: carModel,
     });
     await persist();
-    return send(res, 200, payloadFor(user));
+    let sheetSaved = false;
+    try {
+      sheetSaved = await pushSales([sale]);
+      if (sheetSaved) {
+        sale.sheetSynced = true;
+        await persist();
+      }
+    } catch (error) {
+      console.error(error.message);
+    }
+    const data = payloadFor(user);
+    data.sheetSaved = sheetSaved;
+    return send(res, 200, data);
   }
 
   const deleteSale = pathname.match(/^\/api\/sales\/([^/]+)$/);

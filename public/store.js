@@ -8,7 +8,7 @@
   const SID_KEY = 'go-services-sid';
   const PATCH_EXTRA = 2;
   const VALVE_EXTRA = 2;
-  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyrV4sKIDKSXOrPnSnVsLx5NBgRwvytvtEzcbenHKi4Yk85VfdXinjTeQlxKmESFgE/exec';
+  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbxH0jHhTYSbOi_n6Rqgu4AWC5JpejWLHjY2ieU3s8CBpJne_mwO3uJXQvK_dRyQGF33/exec';
   const CURRENCIES = new Set(['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP']);
   const SECTION_DEFS = [
     { id: 'reparacion', name: 'Reparación', kind: 'rims', rims: ['14', '15', '16', '17', '18', '20'], prices: { 14: 5, 15: 5, 16: 7, 17: 7, 18: 9, 20: 10 }, extras: [{ id: 'valvula', name: 'Válvula', price: 5 }] },
@@ -357,11 +357,8 @@
     };
   }
 
-  async function archiveOldSales() {
-    const url = SHEET_URL;
-    const old = db.sales.filter((sale) => String(sale.date || '') < today());
-    if (!old.length) return;
-    const sales = old.map((sale) => {
+  function sheetRows(sales) {
+    return sales.map((sale) => {
       const parts = String(sale.date || '').split('-').map(Number);
       const weekday = parts[0] && parts[1] && parts[2]
         ? ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][new Date(parts[0], parts[1] - 1, parts[2]).getDay()]
@@ -384,15 +381,32 @@
         voided: Boolean(sale.voided),
       };
     });
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ sales }),
-    });
-    const text = await response.text();
-    if (!response.ok || !/"ok"\s*:\s*true/.test(text)) return;
-    const ids = new Set(old.map((sale) => sale.id));
-    db.sales = db.sales.filter((sale) => !ids.has(sale.id));
+  }
+
+  async function pushSales(sales) {
+    if (!sales.length) return true;
+    try {
+      const response = await fetch(SHEET_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ sales: sheetRows(sales) }),
+      });
+      const text = await response.text();
+      return response.ok && /"ok"\s*:\s*true/.test(text);
+    } catch {
+      return false;
+    }
+  }
+
+  async function archiveOldSales() {
+    const pending = db.sales.filter((sale) => !sale.sheetSynced);
+    if (pending.length) {
+      const ok = await pushSales(pending);
+      if (!ok) return;
+      pending.forEach((sale) => { sale.sheetSynced = true; });
+    }
+    const todayStr = today();
+    db.sales = db.sales.filter((sale) => !sale.sheetSynced || String(sale.date || '') >= todayStr);
     save();
   }
 
@@ -649,7 +663,13 @@
       db.sales.push(sale);
       addMovement({ type: 'venta', productId: '', productName: serviceName, userId: user.id, userName: user.name, previous: 0, next: 0, quantity: 1, note: carModel });
       save();
-      return payloadFor(user);
+      const data = payloadFor(user);
+      data.sheetSaved = await pushSales([sale]);
+      if (data.sheetSaved) {
+        sale.sheetSynced = true;
+        save();
+      }
+      return data;
     }
 
     const deleteSale = pathname.match(/^\/api\/sales\/([^/]+)$/);
