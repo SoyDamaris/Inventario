@@ -34,7 +34,7 @@ const state = {
   openEmployee: null,
   expandedId: null,
   modal: null,
-  saleDraft: { sectionId: '', rim: '', itemId: '', extraPatches: '0', extraValves: '0', customPrice: '', description: '', carModel: '', methods: [], amounts: { yape: '', efectivo: '', transferencia: '' }, employeeId: '' },
+  saleDraft: { lines: [], extraPatches: '0', extraValves: '0', carModel: '', shift: 'dia', discount: '', tip: '', methods: [], amounts: { yappy: '', efectivo: '', transferencia: '' }, employeeId: '' },
   catalogDraft: null,
   loginUser: '',
   loginError: '',
@@ -190,6 +190,7 @@ function sumEmployee(emp, day) {
   const payments = state.payments.filter((item) => item.employeeId === emp.id && inDay(item.date));
   const salesTotal = roundMoney(sales.reduce((total, item) => total + Number(item.total), 0));
   const paid = roundMoney(payments.reduce((total, item) => total + Number(item.amount), 0));
+  const tips = roundMoney(sales.reduce((total, item) => total + (Number(item.tip) || 0), 0));
   const mode = payModeOf(emp);
   let earned = 0;
   let commission = 0;
@@ -201,8 +202,10 @@ function sumEmployee(emp, day) {
     commission = roundMoney(sales.reduce((total, item) => total + Number(item.commissionAmount || 0), 0));
     earned = commission;
   }
+  const base = earned;
+  earned = roundMoney(earned + tips);
   return {
-    salesTotal, commission, paid, earned, mode,
+    salesTotal, commission, tips, paid, earned, base, mode,
     owed: roundMoney(earned - paid),
     sales, allSales, payments,
   };
@@ -571,7 +574,8 @@ function employeeStrip() {
   const day = sumEmployee(state.user, state.day);
   const label = payModeOf(state.user) === 'salario' ? 'Salario de este día' : 'Porcentaje de este día';
   return `<section class="strip">
-    <div><span>${label}</span><strong>${money(day.earned)}</strong></div>
+    <div><span>${label}</span><strong>${money(day.base)}</strong></div>
+    <div><span>Propinas</span><strong>${money(day.tips)}</strong></div>
     <div><span>Ventas de este día</span><strong>${money(day.salesTotal)}</strong></div>
   </section>`;
 }
@@ -643,11 +647,13 @@ function employeeCard(emp) {
     </div>
     <div class="figures">
       <div><span>Ventas del día</span><strong>${money(day.salesTotal)}</strong></div>
-      <div><span>${payName}</span><strong>${money(day.earned)}</strong></div>
+      <div><span>${payName}</span><strong>${money(day.base)}</strong></div>
+      <div><span>Propinas</span><strong>${money(day.tips)}</strong></div>
     </div>
     <div class="inline-actions" style="margin-top:12px">
       <button class="btn ghost small" type="button" data-action="toggle-employee" data-id="${esc(emp.id)}">${open ? 'Ocultar detalle' : 'Ver detalle'}</button>
       <button class="btn ghost small" type="button" data-action="edit-employee" data-id="${esc(emp.id)}">Editar</button>
+      <button class="btn danger small" type="button" data-action="delete-employee" data-id="${esc(emp.id)}">Borrar</button>
     </div>
     ${open ? employeeDetail(emp, day) : ''}
   </article>`;
@@ -674,7 +680,10 @@ function canVoid(sale) {
 function accounts() {
   const rows = state.employees.map((emp) => `<article class="account">
     <div><strong>${esc(emp.name)}</strong><p class="muted">@${esc(emp.username)} · ${payLabel(emp)} ${emp.active ? '' : '· inactiva'}</p></div>
-    <button class="btn ghost small" type="button" data-action="edit-employee" data-id="${esc(emp.id)}">Editar</button>
+    <div class="inline-actions">
+      <button class="btn ghost small" type="button" data-action="edit-employee" data-id="${esc(emp.id)}">Editar</button>
+      <button class="btn danger small" type="button" data-action="delete-employee" data-id="${esc(emp.id)}">Borrar</button>
+    </div>
   </article>`).join('');
   return `${demoBanner()}
     <form data-action="save-settings">
@@ -700,14 +709,16 @@ function commissionsPage() {
     : `Te corresponde el ${percentLabel(state.user.commissionPercent)} de lo que registres.`;
   return `<p class="lead">${lead}</p>
     <div class="stats">
-      <div class="stat accent"><span>${day.mode === 'salario' ? 'Salario del día' : 'Porcentaje del día'}</span><strong>${money(day.earned)}</strong></div>
+      <div class="stat accent"><span>${day.mode === 'salario' ? 'Salario del día' : 'Porcentaje del día'}</span><strong>${money(day.base)}</strong></div>
+      <div class="stat"><span>Propinas</span><strong>${money(day.tips)}</strong></div>
       <div class="stat"><span>Ventas del día</span><strong>${money(day.salesTotal)}</strong></div>
     </div>
     <div class="section-head"><h2>Ventas del día</h2>${daySelect()}</div>
     ${sales.length ? `<ul class="lines">${sales.map((sale) => `<li class="${sale.voided ? 'void' : ''}"><span>${formatDate(sale.date)} · ${esc(sale.productName)} × ${qty(sale.quantity)}</span><span><strong>${money(sale.payMode === 'salario' ? 0 : sale.commissionAmount)}</strong> ${canVoid(sale) ? `<button class="btn ghost small" type="button" data-action="void-sale" data-id="${esc(sale.id)}">Anular</button>` : (sale.voided ? '<small>Anulada</small>' : '')}</span></li>`).join('')}</ul>` : '<div class="empty">No hay ventas en este día.</div>'}`;
 }
 
-const METHOD_LABEL = { yape: 'Yape', efectivo: 'Efectivo', transferencia: 'Transferencia' };
+const METHOD_LABEL = { yappy: 'Yappy', yape: 'Yappy', efectivo: 'Efectivo', transferencia: 'Transferencia' };
+const PAY_METHODS = ['yappy', 'efectivo', 'transferencia'];
 
 function catalog() {
   return state.catalogDraft || state.settings.catalog || { patchExtra: 2, sections: [] };
@@ -757,6 +768,73 @@ function quoteSelection(draft) {
   if (section.kind === 'single') return finish(section.name, Number(section.price) || 0);
   const item = (section.items || []).find((entry) => entry.id === draft.itemId);
   return finish(item ? `Venta de llanta · ${item.name}` : section.name, Number(item?.price) || 0);
+}
+
+function quoteLine(line) {
+  if (!line) return { title: 'Servicio', base: 0 };
+  if (line.sectionId === 'otros') {
+    const text = String(line.description || '').trim();
+    const base = String(line.customPrice ?? '').trim() === '' ? 0 : (Number(String(line.customPrice).replace(',', '.')) || 0);
+    return { title: text ? `Otros · ${text}` : 'Otros', base };
+  }
+  const quote = quoteSelection({ sectionId: line.sectionId, rim: line.rim, itemId: line.itemId, extraPatches: '0', extraValves: '0' });
+  return { title: quote.title, base: quote.base };
+}
+
+function quoteTicket(draft) {
+  const source = savedCatalog();
+  const patch = Number(source.patchExtra) || 2;
+  const valve = 2;
+  const patches = patchCount(draft.extraPatches);
+  const valves = patchCount(draft.extraValves);
+  const patchExtra = patches ? roundMoney(patches * patch) : 0;
+  const valveExtra = valves ? roundMoney(valves * valve) : 0;
+  const lines = (draft.lines || []).map(quoteLine);
+  const base = roundMoney(lines.reduce((sum, line) => sum + (Number(line.base) || 0), 0));
+  const subtotal = patches === null || valves === null ? base : roundMoney(base + patchExtra + valveExtra);
+  const discountText = String(draft.discount ?? '').trim();
+  const tipText = String(draft.tip ?? '').trim();
+  const discount = discountText === '' ? 0 : (Number(discountText.replace(',', '.')) || 0);
+  const tip = tipText === '' ? 0 : (Number(tipText.replace(',', '.')) || 0);
+  return {
+    title: lines.map((line) => line.title).filter(Boolean).join(' + ') || 'Servicio',
+    lines,
+    base,
+    subtotal,
+    discount: Math.max(0, discount),
+    tip: Math.max(0, tip),
+    total: roundMoney(Math.max(0, subtotal - Math.max(0, discount))),
+    invalid: patches === null || valves === null,
+    patchExtra,
+    valveExtra,
+    patches: patches || 0,
+    valves: valves || 0,
+    patch,
+    valve,
+  };
+}
+
+function serviceChoices() {
+  const options = [];
+  (savedCatalog().sections || []).forEach((section) => {
+    if (section.kind === 'rims') {
+      (section.rims || []).forEach((rim) => {
+        const price = Number(section.prices?.[rim]) || 0;
+        if (price > 0) options.push({ value: `${section.id}|${rim}|`, label: `${section.name} · Rim ${rim} · ${money(price)}` });
+      });
+      (section.extras || []).forEach((extra) => {
+        const price = Number(extra.price) || 0;
+        if (price > 0) options.push({ value: `${section.id}|${extra.id}|`, label: `${section.name} · ${extra.name} · ${money(price)}` });
+      });
+      return;
+    }
+    (section.items || []).forEach((item) => {
+      const price = Number(item.price) || 0;
+      if (price > 0) options.push({ value: `${section.id}||${item.id}`, label: `${section.name} · ${item.name} · ${money(price)}` });
+    });
+  });
+  options.push({ value: 'otros||', label: 'Otro servicio' });
+  return options;
 }
 
 function catalogFromAccountsForm() {
@@ -886,37 +964,48 @@ function salesRegister() {
   const mine = manager ? state.sales : state.sales.filter((sale) => sale.employeeId === state.user.id);
   const rows = [...mine].filter((sale) => sale.date === state.day).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   const daySales = rows.filter((sale) => !sale.voided);
-  const byPerson = new Map();
+  const people = new Map();
   daySales.forEach((sale) => {
     const key = sale.employeeId || sale.employeeName;
-    const current = byPerson.get(key) || { name: sale.employeeName || 'Empleado', count: 0, total: 0, pay: 0, mode: sale.payMode };
+    const current = people.get(key) || { id: sale.employeeId, name: sale.employeeName || 'Empleado', count: 0, pay: 0, tips: 0 };
     current.count += 1;
-    current.total += Number(sale.total) || 0;
     current.pay += Number(sale.commissionAmount) || 0;
-    byPerson.set(key, current);
+    current.tips += Number(sale.tip) || 0;
+    people.set(key, current);
   });
-  const summary = [...byPerson.values()].map((item) => {
-    const emp = state.employees.find((person) => person.name === item.name);
-    const amount = emp && payModeOf(emp) === 'salario' ? Number(emp.dailySalary) || 0 : item.pay;
+  const dayTotal = roundMoney(daySales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0));
+  const tipsTotal = roundMoney(daySales.reduce((sum, sale) => sum + (Number(sale.tip) || 0), 0));
+  const payTotal = roundMoney([...people.values()].reduce((sum, item) => {
+    const emp = state.employees.find((person) => person.id === item.id);
+    const base = emp && payModeOf(emp) === 'salario' ? Number(emp.dailySalary) || 0 : item.pay;
+    return sum + base + item.tips;
+  }, 0));
+  const summary = [...people.values()].map((item) => {
+    const emp = state.employees.find((person) => person.id === item.id);
+    const amount = (emp && payModeOf(emp) === 'salario' ? Number(emp.dailySalary) || 0 : item.pay) + item.tips;
     const label = emp && payModeOf(emp) === 'salario' ? 'salario' : 'porcentaje';
-    return `<div class="stat accent"><span>${esc(item.name)} · ${item.count} · ${label}</span><strong>${money(roundMoney(amount))}</strong></div>`;
+    return `<div class="stat accent"><span>${esc(item.name)} · ${item.count} · ${label}${item.tips ? ` · propina ${money(item.tips)}` : ''}</span><strong>${money(roundMoney(amount))}</strong></div>`;
   }).join('');
   const waiting = state.sales.filter((sale) => String(sale.date || '') < todayISO()).length;
   const sheetNote = waiting
     ? `<p class="muted">${waiting} venta${waiting === 1 ? '' : 's'} de días anteriores sigue${waiting === 1 ? '' : 'n'} en el sitio. Se guardan al abrir el inventario.</p>`
     : '';
   const sections = salesSections(manager);
+  const shiftLabel = (sale) => (sale.shift === 'noche' ? 'Noche' : sale.shift === 'dia' ? 'Día' : '—');
   const table = rows.length ? `<div class="table-wrap"><table class="sheet">
       <thead><tr>
-        <th>Fecha</th>${manager ? '<th>Empleado</th>' : ''}
-        <th>Servicio</th><th>Modelo</th><th>Descripción</th><th>Pago</th><th>Total</th><th>Porcentaje</th><th></th>
+        <th>Fecha</th><th>Turno</th>${manager ? '<th>Empleado</th>' : ''}
+        <th>Servicio</th><th>Modelo</th><th>Descripción</th><th>Descuento</th><th>Propina</th><th>Pago</th><th>Total</th><th>Porcentaje</th><th></th>
       </tr></thead>
       <tbody>${rows.map((sale) => `<tr class="${sale.voided ? 'void' : ''}">
         <td data-label="Fecha">${esc(formatDate(sale.date))}</td>
+        <td data-label="Turno">${shiftLabel(sale)}</td>
         ${manager ? `<td data-label="Empleado">${esc(sale.employeeName || '')}</td>` : ''}
         <td data-label="Servicio">${esc(sale.serviceName || sale.productName || '—')}</td>
         <td data-label="Modelo">${esc(sale.carModel || '—')}</td>
         <td data-label="Descripción">${esc(sale.description || '—')}</td>
+        <td data-label="Descuento">${money(sale.discount || 0)}</td>
+        <td data-label="Propina">${money(sale.tip || 0)}</td>
         <td data-label="Pago">${paymentText(sale)}</td>
         <td data-label="Total">${money(sale.total)}</td>
         <td data-label="Porcentaje">${money(sale.voided || sale.payMode === 'salario' ? 0 : sale.commissionAmount)}</td>
@@ -924,9 +1013,14 @@ function salesRegister() {
       </tr>`).join('')}</tbody>
     </table></div>`     : '<div class="empty">No hay ventas en este día.</div>';
   return `${manager ? demoBanner() : ''}
-    <p class="lead">Elige la sección y el Rim. Parches y válvulas suman ${money(2)} cada uno, en cualquier venta. Abajo quedan las ventas de este día.</p>
+    <p class="lead">Elige el servicio. En el mismo carro puedes agregar otro, como reparación y revisión. También van el turno, el descuento y la propina.</p>
     <div class="section-head"><h2>${esc(dayName(state.day))}</h2>${daySelect()}</div>
     ${sheetNote}
+    <section class="strip">
+      <div><span>Total del día</span><strong>${money(dayTotal)}</strong></div>
+      <div><span>Pago a empleados</span><strong>${money(payTotal)}</strong></div>
+      <div><span>Propinas</span><strong>${money(tipsTotal)}</strong></div>
+    </section>
     ${sections}
     <div class="stats">${summary || `<div class="stat accent"><span>Pago de hoy</span><strong>${money(0)}</strong></div>`}</div>
     ${table}`;
@@ -982,14 +1076,20 @@ function counterField(label, field, value, unitPrice) {
 function captureSaleFields() {
   const draft = state.saleDraft;
   const model = document.getElementById('sale-model');
-  const desc = document.getElementById('sale-desc');
   const employee = document.getElementById('sale-employee');
-  const custom = document.getElementById('sale-custom');
+  const discount = document.getElementById('sale-discount');
+  const tip = document.getElementById('sale-tip');
   if (model) draft.carModel = model.value;
-  if (desc) draft.description = desc.value;
-  if (custom) draft.customPrice = custom.value;
+  if (discount) draft.discount = discount.value;
+  if (tip) draft.tip = tip.value;
   if (employee) draft.employeeId = employee.value;
-  ['yape', 'efectivo', 'transferencia'].forEach((method) => {
+  (draft.lines || []).forEach((line, index) => {
+    const price = document.getElementById(`line-price-${index}`);
+    const desc = document.getElementById(`line-desc-${index}`);
+    if (price) line.customPrice = price.value;
+    if (desc) line.description = desc.value;
+  });
+  PAY_METHODS.forEach((method) => {
     const field = document.getElementById(`pay-${method}`);
     if (field) draft.amounts[method] = field.value;
   });
@@ -997,30 +1097,43 @@ function captureSaleFields() {
 
 function saleFloat() {
   const draft = state.saleDraft;
-  const quote = quoteSelection(draft);
-  const otros = draft.sectionId === 'otros';
-  const checks = ['yape', 'efectivo', 'transferencia'].map((method) => `<label><input type="checkbox" data-action="pay-method" data-method="${method}" ${draft.methods.includes(method) ? 'checked' : ''}> ${METHOD_LABEL[method]}</label>`).join('');
+  const quote = quoteTicket(draft);
+  const checks = PAY_METHODS.map((method) => `<label><input type="checkbox" data-action="pay-method" data-method="${method}" ${draft.methods.includes(method) ? 'checked' : ''}> ${METHOD_LABEL[method]}</label>`).join('');
   const amounts = draft.methods.map((method) => `<label class="field"><span>Monto en ${METHOD_LABEL[method]}</span><input id="pay-${method}" inputmode="decimal" value="${esc(draft.amounts[method] || '')}" required></label>`).join('');
   const who = state.user.role === 'gerente'
     ? `<label class="field"><span>Empleado</span><select id="sale-employee">${state.employees.filter((emp) => emp.active !== false).map((emp) => `<option value="${esc(emp.id)}" ${emp.id === draft.employeeId ? 'selected' : ''}>${esc(emp.name)} · ${payLabel(emp)}</option>`).join('')}</select></label>`
     : '';
-  const parts = [];
-  if (quote.base > 0) parts.push(`Precio ${money(quote.base)}`);
-  if (quote.patches) parts.push(`parches ${money(quote.patchExtra)}`);
-  if (quote.valves) parts.push(`válvulas ${money(quote.valveExtra)}`);
+  const lines = (draft.lines || []).map((line, index) => {
+    const quoted = quote.lines[index] || quoteLine(line);
+    const otros = line.sectionId === 'otros';
+    return `<div class="ticket-line"><span>${esc(quoted.title)} · ${money(quoted.base)}</span><button class="btn ghost small" type="button" data-action="remove-line" data-index="${index}" ${draft.lines.length === 1 ? 'disabled' : ''}>Quitar</button></div>
+      ${otros ? `<label class="field"><span>Descripción</span><textarea id="line-desc-${index}" maxlength="300">${esc(line.description || '')}</textarea></label><label class="field"><span>Valor</span><input id="line-price-${index}" inputmode="decimal" value="${esc(line.customPrice || '')}" placeholder="0"></label>` : ''}`;
+  }).join('');
+  const choices = serviceChoices().map((option) => `<option value="${esc(option.value)}">${esc(option.label)}</option>`).join('');
   const priceLine = quote.total > 0
-    ? `${parts.join(' + ') || `Total ${money(quote.total)}`}. Los montos tienen que sumar ${money(quote.total)}.`
-    : 'Escribe el valor del trabajo o suma parches y válvulas. Si el total queda en cero, el pago que escribas es el total.';
+    ? `Servicios ${money(quote.subtotal)}${quote.discount ? ` − descuento ${money(quote.discount)}` : ''}. A cobrar ${money(quote.total)}.${quote.tip ? ` Propina ${money(quote.tip)}, aparte del cobro.` : ''} Los montos tienen que sumar ${money(quote.total)}.`
+    : 'Si el descuento deja el servicio en cero, no hace falta anotar un pago. La propina queda aparte, para el empleado.';
   return `<form class="bubble" data-action="save-sale">
     <h2>${esc(quote.title)}</h2>
     <p class="muted">${priceLine}</p>
+    <div class="field"><span>Turno</span></div>
+    <div class="pay-options">
+      <label><input type="radio" name="shift" value="dia" ${draft.shift !== 'noche' ? 'checked' : ''}> Día</label>
+      <label><input type="radio" name="shift" value="noche" ${draft.shift === 'noche' ? 'checked' : ''}> Noche</label>
+    </div>
     ${who}
+    ${lines}
+    <label class="field"><span>Agregar otro servicio del mismo carro</span><select id="extra-service">${choices}</select></label>
+    <button class="btn ghost small" type="button" data-action="add-service">Agregar servicio</button>
     ${counterField('Parches', 'extraPatches', draft.extraPatches, quote.patch)}
     ${counterField('Válvulas', 'extraValves', draft.extraValves, quote.valve)}
     ${quote.invalid ? '<p class="form-error">Usa un número entero de 0 a 30.</p>' : ''}
-    ${otros ? `<label class="field"><span>Valor del trabajo</span><input id="sale-custom" inputmode="decimal" value="${esc(draft.customPrice || '')}" placeholder="0"></label><label class="field"><span>Descripción de lo vendido</span><textarea id="sale-desc" maxlength="300" required>${esc(draft.description || '')}</textarea></label>` : ''}
+    <div class="split">
+      <label class="field"><span>Descuento</span><input id="sale-discount" inputmode="decimal" value="${esc(draft.discount || '')}" placeholder="0"></label>
+      <label class="field"><span>Propina del empleado</span><input id="sale-tip" inputmode="decimal" value="${esc(draft.tip || '')}" placeholder="0"></label>
+    </div>
     <label class="field"><span>Modelo del carro</span><input id="sale-model" maxlength="80" value="${esc(draft.carModel || '')}" required></label>
-    <div class="field"><span>Método de pago</span><small class="muted">Máximo dos.</small></div>
+    <div class="field"><span>Método de pago</span><small class="muted">Máximo dos. Yappy, efectivo o transferencia.</small></div>
     <div class="pay-options">${checks}</div>
     <div class="pay-amounts">${amounts}</div>
     <p class="form-error" data-form-error hidden></p>
@@ -1195,8 +1308,8 @@ function meModal() {
 
 function render() {
   const active = document.activeElement;
-  const keepFocus = ['search', 'sale-model', 'sale-desc', 'sale-custom', 'pay-yape', 'pay-efectivo', 'pay-transferencia'];
-  const restore = active && keepFocus.includes(active.id)
+  const keepFocus = ['search', 'sale-model', 'sale-discount', 'sale-tip', 'pay-yappy', 'pay-efectivo', 'pay-transferencia'];
+  const restore = active && (keepFocus.includes(active.id) || /^line-(desc|price)-\d+$/.test(active.id))
     ? { id: active.id, start: active.selectionStart, end: active.selectionEnd }
     : null;
   const app = document.getElementById('app');
@@ -1320,20 +1433,48 @@ async function onClick(event) {
       }
       const first = state.employees.find((item) => item.active !== false);
       state.saleDraft = {
-        sectionId,
-        rim,
-        itemId,
+        lines: [{ sectionId, rim, itemId, customPrice: '', description: '' }],
         extraPatches: '0',
         extraValves: '0',
-        customPrice: '',
-        description: '',
         carModel: '',
+        shift: 'dia',
+        discount: '',
+        tip: '',
         methods: [],
-        amounts: { yape: '', efectivo: '', transferencia: '' },
+        amounts: { yappy: '', efectivo: '', transferencia: '' },
         employeeId: state.user.role === 'empleado' ? state.user.id : (first?.id || ''),
       };
       state.modal = { type: 'registro' };
       render();
+    } else if (action === 'add-service') {
+      captureSaleFields();
+      const select = document.getElementById('extra-service');
+      const [sectionId, rim, itemId] = String(select?.value || '').split('|');
+      if (!sectionId) return;
+      if (sectionId !== 'otros') {
+        const quote = quoteSelection({ sectionId, rim, itemId, extraPatches: '0' });
+        if (!(quote.total > 0)) {
+          showToast('Esa opción todavía no tiene precio. La gerencia lo anota en Cuentas.', 'err');
+          return;
+        }
+      }
+      if (state.saleDraft.lines.length >= 8) {
+        showToast('En un mismo carro se pueden anotar hasta 8 servicios.', 'err');
+        return;
+      }
+      state.saleDraft.lines.push({ sectionId, rim: rim || '', itemId: itemId || '', customPrice: '', description: '' });
+      render();
+    } else if (action === 'remove-line') {
+      captureSaleFields();
+      if (state.saleDraft.lines.length > 1) state.saleDraft.lines.splice(Number(el.dataset.index), 1);
+      render();
+    } else if (action === 'delete-employee') {
+      const emp = state.employees.find((item) => item.id === el.dataset.id);
+      if (!emp) return;
+      if (!confirm(`¿Borrar a ${emp.name}? Las ventas que ya hizo se quedan en el registro.`)) return;
+      await api(`/api/employees/${emp.id}`, { method: 'DELETE' });
+      await refresh();
+      showToast('Empleado borrado.');
     } else if (action === 'step-extra') {
       const field = el.dataset.field;
       const current = patchCount(state.saleDraft[field]) || 0;
@@ -1462,35 +1603,50 @@ async function onSubmit(event) {
     if (action === 'save-sale') {
       captureSaleFields();
       const draft = state.saleDraft;
+      const shift = form.querySelector('input[name="shift"]:checked')?.value === 'noche' ? 'noche' : 'dia';
+      draft.shift = shift;
       const patches = patchCount(draft.extraPatches);
       const valves = patchCount(draft.extraValves);
       if (patches === null || valves === null) throw new Error('Los parches y las válvulas deben ser un número entero de 0 a 30.');
-      const quote = quoteSelection(draft);
+      const quote = quoteTicket(draft);
       if (!String(draft.carModel || '').trim()) throw new Error('Escribe el modelo del carro.');
-      if (draft.sectionId === 'otros' && !String(draft.description || '').trim()) throw new Error('Describe lo que se vendió.');
-      if (draft.sectionId !== 'otros' && !(quote.base > 0)) throw new Error('Esa opción todavía no tiene precio.');
-      if (!draft.methods.length) throw new Error('Elige un método de pago.');
+      if (!draft.lines.length) throw new Error('Elige un servicio.');
+      draft.lines.forEach((line) => {
+        if (line.sectionId === 'otros' && !String(line.description || '').trim()) throw new Error('Describe lo que se vendió.');
+        if (line.sectionId !== 'otros' && !(quoteLine(line).base > 0)) throw new Error('Esa opción todavía no tiene precio.');
+      });
+      const discountText = String(draft.discount || '').trim();
+      const tipText = String(draft.tip || '').trim();
+      const discount = discountText === '' ? 0 : parseQty(discountText);
+      const tip = tipText === '' ? 0 : parseQty(tipText);
+      if (!Number.isFinite(discount) || discount < 0) throw new Error('El descuento tiene que ser un número.');
+      if (!Number.isFinite(tip) || tip < 0) throw new Error('La propina tiene que ser un número.');
+      if (discount - quote.subtotal > 0.009) throw new Error('El descuento no puede pasar el precio del servicio.');
+      if (quote.total > 0 && !draft.methods.length) throw new Error('Elige un método de pago.');
       if (draft.methods.length > 2) throw new Error('Solo puedes elegir dos métodos de pago.');
       const payments = draft.methods.map((method) => {
         const amount = parseQty(draft.amounts[method]);
-        if (!Number.isFinite(amount) || amount <= 0) {
-          throw new Error(method === 'yape' ? 'Escribe el monto que se pagó en Yape.' : `Escribe el monto en ${METHOD_LABEL[method]}.`);
-        }
+        if (!Number.isFinite(amount) || amount <= 0) throw new Error(`Escribe el monto en ${METHOD_LABEL[method]}.`);
         return { method, amount };
       });
       const paid = roundMoney(payments.reduce((sum, item) => sum + item.amount, 0));
-      if (quote.total > 0 && Math.abs(paid - quote.total) > 0.009) throw new Error('Los montos deben sumar el precio de la opción.');
+      if (quote.total > 0 && Math.abs(paid - quote.total) > 0.009) throw new Error('Los montos deben sumar el precio del servicio, ya con el descuento.');
       const saved = await api('/api/sales', {
         method: 'POST',
         body: {
-          sectionId: draft.sectionId,
-          rim: draft.rim,
-          itemId: draft.itemId,
+          lines: draft.lines.map((line) => ({
+            sectionId: line.sectionId,
+            rim: line.rim,
+            itemId: line.itemId,
+            customPrice: line.customPrice || '',
+            description: line.description || '',
+          })),
           extraPatches: patches || 0,
           extraValves: valves || 0,
-          customPrice: draft.customPrice || '',
-          description: draft.description,
           carModel: draft.carModel,
+          shift,
+          discount,
+          tip,
           payments,
           employeeId: state.user.role === 'empleado' ? state.user.id : draft.employeeId,
         },
@@ -1602,12 +1758,16 @@ function onInput(event) {
   const id = event.target.id;
   if (id === 'search') state.query = event.target.value;
   if (id === 'sale-model') state.saleDraft.carModel = event.target.value;
-  if (id === 'sale-desc') state.saleDraft.description = event.target.value;
-  if (id === 'sale-custom') state.saleDraft.customPrice = event.target.value;
-  if (id === 'pay-yape' || id === 'pay-efectivo' || id === 'pay-transferencia') {
+  if (id === 'sale-discount') state.saleDraft.discount = event.target.value;
+  if (id === 'sale-tip') state.saleDraft.tip = event.target.value;
+  const linePrice = id.match(/^line-price-(\d+)$/);
+  const lineDesc = id.match(/^line-desc-(\d+)$/);
+  if (linePrice && state.saleDraft.lines[Number(linePrice[1])]) state.saleDraft.lines[Number(linePrice[1])].customPrice = event.target.value;
+  if (lineDesc && state.saleDraft.lines[Number(lineDesc[1])]) state.saleDraft.lines[Number(lineDesc[1])].description = event.target.value;
+  if (id === 'pay-yappy' || id === 'pay-efectivo' || id === 'pay-transferencia') {
     state.saleDraft.amounts[id.slice(4)] = event.target.value;
   }
-  if (['search', 'sale-model', 'sale-desc', 'sale-custom', 'pay-yape', 'pay-efectivo', 'pay-transferencia'].includes(id)) render();
+  if (['search', 'sale-model', 'sale-discount', 'sale-tip', 'pay-yappy', 'pay-efectivo', 'pay-transferencia'].includes(id) || linePrice || lineDesc) render();
 }
 
 function onChange(event) {
@@ -1632,6 +1792,9 @@ function onChange(event) {
   if (event.target.id === 'sale-employee') {
     state.saleDraft.employeeId = event.target.value;
     render();
+  }
+  if (event.target.name === 'shift') {
+    state.saleDraft.shift = event.target.value === 'noche' ? 'noche' : 'dia';
   }
   if (event.target.id === 'product-image') readImage(event.target.files[0]);
 }

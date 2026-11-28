@@ -1,7 +1,7 @@
 var FOLDER = 'GO Services';
 var MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 var WEEKDAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-var HEADERS = ['Id', 'Día', 'Semana', 'Fecha', 'Hora', 'Empleado', 'Servicio', 'Rim', 'Parches', 'Válvulas', 'Modelo', 'Descripción', 'Pago', 'Total', 'Porcentaje', 'Estado'];
+var HEADERS = ['Id', 'Día', 'Semana', 'Fecha', 'Hora', 'Empleado', 'Servicio', 'Rim', 'Parches', 'Válvulas', 'Modelo', 'Descripción', 'Pago', 'Total', 'Porcentaje', 'Estado', 'Turno', 'Descuento', 'Propina'];
 
 function doPost(e) {
   var raw = (e && e.postData && e.postData.contents) ? e.postData.contents : '{}';
@@ -40,7 +40,10 @@ function doPost(e) {
       sale.payment || '',
       sale.total || 0,
       sale.commissionAmount || 0,
-      sale.voided ? 'Anulada' : 'Registrada'
+      sale.voided ? 'Anulada' : 'Registrada',
+      sale.shift || '',
+      sale.discount || 0,
+      sale.tip || 0
     ];
     var at = Math.max(sheet.getLastRow(), 1) + 1;
     sheet.getRange(at, 1, 1, HEADERS.length).setValues([row]);

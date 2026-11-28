@@ -470,6 +470,8 @@ table.sheet td.actions .btn { margin-right: 4px; }
 }
 .bubble h2 { margin: 0 0 6px; font-size: 22px; }
 .pay-options { display: grid; gap: 8px; margin: 8px 0 12px; }
+.ticket-line { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.ticket-line span { min-width: 0; }
 .pay-options label { display: flex; gap: 8px; align-items: center; background: #f6f4f4; border-radius: 12px; padding: 8px 10px; }
 .pay-options input[type="checkbox"] { width: auto; }
 .pay-amounts { display: grid; gap: 8px; }

@@ -24,8 +24,8 @@ const SECTION_DEFS = [
     id: 'reparacion',
     name: 'Reparación',
     kind: 'rims',
-    rims: ['14', '15', '16', '17', '18', '20'],
-    prices: { 14: 5, 15: 5, 16: 7, 17: 7, 18: 9, 20: 10 },
+    rims: ['14', '15', '16', '17', '18', '19', '20'],
+    prices: { 14: 5, 15: 5, 16: 6, 17: 7, 18: 8, 19: 9, 20: 10 },
     extras: [{ id: 'valvula', name: 'Válvula', price: 5 }],
   },
   {
@@ -325,7 +325,8 @@ function ensure() {
     db.settings.services = defaultServices();
   }
   const hadCatalog = Boolean(db.settings.catalog && Array.isArray(db.settings.catalog.sections));
-  const applyList = !hadCatalog || db.settings.catalog.priceList !== 1;
+  const listVersion = hadCatalog ? db.settings.catalog.priceList : 0;
+  const applyList = !hadCatalog || (listVersion !== 1 && listVersion !== 2);
   if (applyList) {
     const previous = hadCatalog
       ? (db.settings.catalog.sections.find((section) => section.id === 'venta_llanta')?.items || [])
@@ -339,7 +340,18 @@ function ensure() {
     })).filter((item) => item.name);
     if (!hadCatalog) db.settings.currency = 'USD';
   } else {
+    const previousList = db.settings.catalog.priceList;
     db.settings.catalog = normalizeCatalog(db.settings.catalog);
+    if (previousList !== 2) {
+      const def = SECTION_DEFS.find((section) => section.id === 'reparacion');
+      const repair = db.settings.catalog.sections.find((section) => section.id === 'reparacion');
+      if (def && repair) {
+        repair.rims = def.rims.slice();
+        repair.prices = Object.fromEntries(def.rims.map((rim) => [rim, def.prices[rim]]));
+      }
+      db.settings.catalog.priceList = 2;
+      persistSync();
+    }
   }
   db.settings.commissionRate = commissionRate();
   if (applyList) persistSync();
@@ -391,7 +403,7 @@ function defaultServices() {
 function blankCatalog() {
   return {
     patchExtra: PATCH_EXTRA,
-    priceList: 1,
+    priceList: 2,
     sections: SECTION_DEFS.map((def) => {
       if (def.kind === 'rims') {
         return {
@@ -448,7 +460,7 @@ function catalogFromBody(body) {
   const seen = new Set();
   return {
     patchExtra: PATCH_EXTRA,
-    priceList: 1,
+    priceList: 2,
     sections: SECTION_DEFS.map((def) => {
       const current = incoming.get(def.id) || {};
       if (def.kind === 'rims') {
@@ -679,10 +691,47 @@ function requestText(url, method, body, redirects) {
   });
 }
 
+const PAY_LABEL = { yappy: 'Yappy', yape: 'Yappy', efectivo: 'Efectivo', transferencia: 'Transferencia' };
+
+function payMethod(value) {
+  const method = String(value || '');
+  return method === 'yape' ? 'yappy' : method;
+}
+
+function linePrice(catalog, line) {
+  const sectionId = String(line?.sectionId || '');
+  if (sectionId === 'otros') {
+    const description = cleanText(line.description, 300);
+    if (!description) throw httpError(400, 'Describe lo que se vendió.');
+    const price = String(line.customPrice ?? '').trim() === ''
+      ? 0
+      : cleanNumber(line.customPrice, { min: 0, max: 1000000000, label: 'El valor del trabajo' });
+    return { sectionId, title: `Otros · ${description}`, price, rim: '', description };
+  }
+  const section = catalog.sections.find((item) => item.id === sectionId);
+  if (!section) throw httpError(400, 'Elige una sección.');
+  if (section.kind === 'rims') {
+    const rim = String(line.rim || '');
+    const extraOption = (section.extras || []).find((item) => item.id === rim);
+    if (extraOption) {
+      return { sectionId, title: `${section.name} · ${extraOption.name}`, price: Number(extraOption.price) || 0, rim, description: '' };
+    }
+    if ((section.rims || []).includes(rim)) {
+      return { sectionId, title: `${section.name} · Rim ${rim}`, price: Number(section.prices[rim]) || 0, rim, description: '' };
+    }
+    throw httpError(400, 'Elige el Rim.');
+  }
+  const item = (section.items || []).find((entry) => entry.id === String(line.itemId || ''));
+  if (!item) throw httpError(400, 'Elige la llanta.');
+  return { sectionId, title: `Venta de llanta · ${item.name}`, price: Number(item.price) || 0, rim: '', description: '' };
+}
+
 function sheetSale(sale) {
   const time = sale.createdAt ? new Date(sale.createdAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : '';
-  const payment = Array.isArray(sale.payments) ? sale.payments.map((item) => `${item.method} ${item.amount}`).join(' + ') : '';
-  const rim = /^\d+$/.test(String(sale.rim || '')) ? `Rim ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : '');
+  const payment = Array.isArray(sale.payments) ? sale.payments.map((item) => `${PAY_LABEL[item.method] || item.method} ${item.amount}`).join(' + ') : '';
+  const rim = String(sale.rim || '').split(',').map((item) => item.trim()).filter(Boolean).map((item) => (
+    /^\d+$/.test(item) ? `Rim ${item}` : (item === 'valvula' ? 'Válvula' : '')
+  )).filter(Boolean).join(', ');
   const parts = String(sale.date || '').split('-').map(Number);
   const weekday = parts[0] && parts[1] && parts[2]
     ? ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][new Date(parts[0], parts[1] - 1, parts[2]).getDay()]
@@ -703,6 +752,9 @@ function sheetSale(sale) {
     total: sale.total || 0,
     commissionAmount: sale.commissionAmount || 0,
     voided: Boolean(sale.voided),
+    shift: sale.shift === 'noche' ? 'Noche' : (sale.shift === 'dia' ? 'Día' : ''),
+    discount: sale.discount || 0,
+    tip: sale.tip || 0,
   };
 }
 
@@ -947,6 +999,18 @@ async function handleApi(req, res, pathname) {
   }
 
   const employeeId = pathname.match(/^\/api\/employees\/([^/]+)$/);
+  if (req.method === 'DELETE' && employeeId) {
+    requireUser(req, 'gerente');
+    const id = decodeURIComponent(employeeId[1]);
+    const employee = findEmployee(id);
+    db.users = db.users.filter((item) => item.id !== employee.id);
+    for (const [sid, session] of sessions) {
+      if (session.userId === employee.id) sessions.delete(sid);
+    }
+    await persist();
+    return send(res, 200, payloadFor(requireUser(req, 'gerente')));
+  }
+
   if (req.method === 'PUT' && employeeId) {
     const user = requireUser(req, 'gerente');
     const employee = findEmployee(decodeURIComponent(employeeId[1]));
@@ -999,87 +1063,66 @@ async function handleApi(req, res, pathname) {
     if (employee.active === false) throw httpError(400, 'Ese empleado está inactivo.');
     const carModel = cleanText(body.carModel, 80);
     if (!carModel) throw httpError(400, 'Escribe el modelo del carro.');
-    const sectionId = String(body.sectionId || '');
-    let serviceName = 'Otros';
-    let catalogPrice = 0;
-    let description = '';
-    let rim = '';
-    let extraPatches = 0;
-    let extraValves = 0;
-    if (sectionId === 'otros') {
-      description = cleanText(body.description, 300);
-      if (!description) throw httpError(400, 'Describe lo que se vendió.');
-      if (String(body.customPrice ?? '').trim() !== '') {
-        catalogPrice = cleanNumber(body.customPrice, { min: 0, max: 1000000000, label: 'El valor del trabajo' });
-      }
-    } else {
-      const catalog = normalizeCatalog(db.settings.catalog);
-      const section = catalog.sections.find((item) => item.id === sectionId);
-      if (!section) throw httpError(400, 'Elige una sección.');
-      serviceName = section.name;
-      if (section.kind === 'rims') {
-        rim = String(body.rim || '');
-        const extraOption = (section.extras || []).find((item) => item.id === rim);
-        if (extraOption) {
-          catalogPrice = Number(extraOption.price) || 0;
-          serviceName = `${section.name} · ${extraOption.name}`;
-        } else if ((section.rims || []).includes(rim)) {
-          catalogPrice = Number(section.prices[rim]) || 0;
-          serviceName = `${section.name} · Rim ${rim}`;
-        } else {
-          throw httpError(400, 'Elige el Rim.');
-        }
-      } else if (section.kind === 'single') {
-        catalogPrice = Number(section.price) || 0;
-      } else {
-        const item = section.items.find((entry) => entry.id === String(body.itemId || ''));
-        if (!item) throw httpError(400, 'Elige la llanta.');
-        catalogPrice = Number(item.price) || 0;
-        serviceName = `Venta de llanta · ${item.name}`;
-      }
-      if (!(catalogPrice > 0)) throw httpError(400, 'Esa opción todavía no tiene precio.');
+    const shift = body.shift === 'noche' ? 'noche' : body.shift === 'dia' ? 'dia' : '';
+    if (!shift) throw httpError(400, 'Elige el turno del día o de la noche.');
+    const incoming = Array.isArray(body.lines) && body.lines.length
+      ? body.lines
+      : [{ sectionId: body.sectionId, rim: body.rim, itemId: body.itemId, customPrice: body.customPrice, description: body.description }];
+    if (incoming.length > 8) throw httpError(400, 'En un mismo carro se pueden anotar hasta 8 servicios.');
+    const catalog = normalizeCatalog(db.settings.catalog);
+    const resolved = incoming.map((line) => linePrice(catalog, line));
+    if (resolved.some((line) => line.sectionId !== 'otros' && !(line.price > 0))) {
+      throw httpError(400, 'Esa opción todavía no tiene precio.');
     }
-    extraPatches = extraCount(body.extraPatches, 'Los parches');
-    extraValves = extraCount(body.extraValves, 'Las válvulas');
-    const priced = withAddons(serviceName, description, catalogPrice, extraPatches, extraValves);
-    serviceName = priced.serviceName;
-    description = priced.description;
-    catalogPrice = priced.catalogPrice;
-    const methods = new Set(['yape', 'efectivo', 'transferencia']);
+    const extraPatches = extraCount(body.extraPatches, 'Los parches');
+    const extraValves = extraCount(body.extraValves, 'Las válvulas');
+    const names = resolved.map((line) => line.title).join(' + ');
+    const notes = resolved.map((line) => line.description).filter(Boolean).join('. ');
+    const priced = withAddons(names, notes, resolved.reduce((sum, line) => sum + line.price, 0), extraPatches, extraValves);
+    const discount = String(body.discount ?? '').trim() === ''
+      ? 0
+      : cleanNumber(body.discount, { min: 0, max: 1000000000, label: 'El descuento' });
+    if (discount - priced.catalogPrice > 0.009) throw httpError(400, 'El descuento no puede pasar el precio del servicio.');
+    const tip = String(body.tip ?? '').trim() === ''
+      ? 0
+      : cleanNumber(body.tip, { min: 0, max: 1000000000, label: 'La propina' });
+    const charged = roundMoney(priced.catalogPrice - discount);
+    const methods = new Set(['yappy', 'efectivo', 'transferencia']);
     const payments = Array.isArray(body.payments) ? body.payments : [];
-    if (payments.length < 1 || payments.length > 2) throw httpError(400, 'Elige uno o dos métodos de pago.');
+    if (charged > 0 && (payments.length < 1 || payments.length > 2)) throw httpError(400, 'Elige uno o dos métodos de pago.');
+    if (charged === 0 && payments.length > 2) throw httpError(400, 'Elige uno o dos métodos de pago.');
     const cleanPayments = payments.map((item) => {
-      const method = String(item.method || '');
+      const method = payMethod(item.method);
       if (!methods.has(method)) throw httpError(400, 'Ese método de pago no está disponible.');
       return { method, amount: cleanNumber(item.amount, { min: 0.01, max: 1000000000, label: 'El monto' }) };
     });
     if (new Set(cleanPayments.map((item) => item.method)).size !== cleanPayments.length) {
       throw httpError(400, 'No repitas el mismo método de pago.');
     }
-    if (cleanPayments.some((item) => item.method === 'yape' && !(item.amount > 0))) {
-      throw httpError(400, 'Escribe el monto que se pagó en Yape.');
-    }
-    if (cleanPayments.length === 2 && cleanPayments.some((item) => !(item.amount > 0))) {
-      throw httpError(400, 'Escribe el monto de cada método de pago.');
-    }
     const paid = roundMoney(cleanPayments.reduce((sum, item) => sum + item.amount, 0));
-    if (catalogPrice > 0 && Math.abs(paid - catalogPrice) > 0.009) {
-      throw httpError(400, 'Los montos deben sumar el precio del servicio.');
+    if (charged > 0 && Math.abs(paid - charged) > 0.009) {
+      throw httpError(400, 'Los montos deben sumar el precio del servicio, ya con el descuento.');
     }
-    const total = catalogPrice > 0 ? catalogPrice : paid;
+    const total = charged;
     const payMode = employee.payMode === 'salario' ? 'salario' : 'porcentaje';
     const percent = payMode === 'salario' ? 0 : Number(employee.commissionPercent) || 0;
+    const serviceName = priced.serviceName;
+    const description = [priced.description, discount ? `Descuento ${discount}` : '', tip ? `Propina ${tip}` : ''].filter(Boolean).join('. ');
     const sale = {
       id: uid('ven'),
       employeeId: employee.id,
       employeeName: employee.name,
-      sectionId,
+      sectionId: resolved[0].sectionId,
+      lines: resolved.map((line) => ({ sectionId: line.sectionId, title: line.title, price: line.price, rim: line.rim })),
       serviceName,
-      rim,
+      rim: resolved.map((line) => line.rim).filter((item) => /^\d+$/.test(item)).join(', '),
       extraPatches,
       extraValves,
       description,
       carModel,
+      shift,
+      discount,
+      tip,
       payments: cleanPayments,
       productId: null,
       productName: serviceName,

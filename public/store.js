@@ -11,7 +11,7 @@
   const SHEET_URL = 'https://script.google.com/macros/s/AKfycbxH0jHhTYSbOi_n6Rqgu4AWC5JpejWLHjY2ieU3s8CBpJne_mwO3uJXQvK_dRyQGF33/exec';
   const CURRENCIES = new Set(['COP', 'MXN', 'USD', 'EUR', 'PEN', 'ARS', 'CLP']);
   const SECTION_DEFS = [
-    { id: 'reparacion', name: 'Reparación', kind: 'rims', rims: ['14', '15', '16', '17', '18', '20'], prices: { 14: 5, 15: 5, 16: 7, 17: 7, 18: 9, 20: 10 }, extras: [{ id: 'valvula', name: 'Válvula', price: 5 }] },
+    { id: 'reparacion', name: 'Reparación', kind: 'rims', rims: ['14', '15', '16', '17', '18', '19', '20'], prices: { 14: 5, 15: 5, 16: 6, 17: 7, 18: 8, 19: 9, 20: 10 }, extras: [{ id: 'valvula', name: 'Válvula', price: 5 }] },
     { id: 'balances', name: 'Balances', kind: 'rims', rims: ['14', '15', '16', '17', '18', '20'], prices: { 14: 4, 15: 4, 16: 5, 17: 5, 18: 5, 20: 5 } },
     { id: 'rotacion', name: 'Rotación', kind: 'rims', rims: ['14', '15', '16', '17', '18', '20'], prices: { 14: 3, 15: 3, 16: 4, 17: 4, 18: 4, 20: 4 } },
     { id: 'cambio', name: 'Cambio de llantas', kind: 'rims', rims: ['14', '15', '16', '17', '18', '19', '20'], prices: { 14: 3, 15: 3, 16: 4, 17: 4, 18: 4, 19: 5, 20: 5 } },
@@ -121,7 +121,7 @@
   function blankCatalog() {
     return {
       patchExtra: PATCH_EXTRA,
-      priceList: 1,
+      priceList: 2,
       sections: SECTION_DEFS.map((def) => {
         if (def.kind === 'rims') {
           return {
@@ -175,7 +175,7 @@
     const seen = new Set();
     return {
       patchExtra: PATCH_EXTRA,
-      priceList: 1,
+      priceList: 2,
       sections: SECTION_DEFS.map((def) => {
         const current = incoming.get(def.id) || {};
         if (def.kind === 'rims') {
@@ -239,7 +239,18 @@
       db = JSON.parse(localStorage.getItem(DB_KEY) || '');
       if (!db || !Array.isArray(db.users)) throw new Error('vacío');
       db.settings ||= {};
+      const previousList = db.settings.catalog?.priceList;
       db.settings.catalog = normalizeCatalog(db.settings.catalog);
+      if (previousList !== 2) {
+        const def = SECTION_DEFS.find((section) => section.id === 'reparacion');
+        const repair = db.settings.catalog.sections.find((section) => section.id === 'reparacion');
+        if (def && repair) {
+          repair.rims = def.rims.slice();
+          repair.prices = Object.fromEntries(def.rims.map((rim) => [rim, def.prices[rim]]));
+        }
+        db.settings.catalog.priceList = 2;
+        save();
+      }
       db.products ||= [];
       db.shifts ||= [];
       db.sales ||= [];
@@ -357,6 +368,37 @@
     };
   }
 
+  const PAY_LABEL = { yappy: 'Yappy', yape: 'Yappy', efectivo: 'Efectivo', transferencia: 'Transferencia' };
+
+  function payMethod(value) {
+    const method = String(value || '');
+    return method === 'yape' ? 'yappy' : method;
+  }
+
+  function linePrice(catalog, line) {
+    const sectionId = String(line?.sectionId || '');
+    if (sectionId === 'otros') {
+      const description = cleanText(line.description, 300);
+      if (!description) fail(400, 'Describe lo que se vendió.');
+      const price = String(line.customPrice ?? '').trim() === ''
+        ? 0
+        : cleanNumber(line.customPrice, { min: 0, label: 'El valor del trabajo' });
+      return { sectionId, title: `Otros · ${description}`, price, rim: '', description };
+    }
+    const section = (catalog.sections || []).find((item) => item.id === sectionId);
+    if (!section) fail(400, 'Elige una sección.');
+    if (section.kind === 'rims') {
+      const rim = String(line.rim || '');
+      const extraOption = (section.extras || []).find((item) => item.id === rim);
+      if (extraOption) return { sectionId, title: `${section.name} · ${extraOption.name}`, price: Number(extraOption.price) || 0, rim, description: '' };
+      if ((section.rims || []).includes(rim)) return { sectionId, title: `${section.name} · Rim ${rim}`, price: Number(section.prices[rim]) || 0, rim, description: '' };
+      fail(400, 'Elige el Rim.');
+    }
+    const item = (section.items || []).find((entry) => entry.id === String(line.itemId || ''));
+    if (!item) fail(400, 'Elige la llanta.');
+    return { sectionId, title: `Venta de llanta · ${item.name}`, price: Number(item.price) || 0, rim: '', description: '' };
+  }
+
   function sheetRows(sales) {
     return sales.map((sale) => {
       const parts = String(sale.date || '').split('-').map(Number);
@@ -370,15 +412,20 @@
         time: sale.createdAt ? new Date(sale.createdAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : '',
         employeeName: sale.employeeName || '',
         serviceName: sale.serviceName || '',
-        rim: /^\d+$/.test(String(sale.rim || '')) ? `Rim ${sale.rim}` : (sale.rim === 'valvula' ? 'Válvula' : ''),
+        rim: String(sale.rim || '').split(',').map((item) => item.trim()).filter(Boolean).map((item) => (
+          /^\d+$/.test(item) ? `Rim ${item}` : (item === 'valvula' ? 'Válvula' : '')
+        )).filter(Boolean).join(', '),
         extraPatches: sale.extraPatches || 0,
         extraValves: sale.extraValves || 0,
         carModel: sale.carModel || '',
         description: sale.description || '',
-        payment: (sale.payments || []).map((item) => `${item.method} ${item.amount}`).join(' + '),
+        payment: (sale.payments || []).map((item) => `${PAY_LABEL[item.method] || item.method} ${item.amount}`).join(' + '),
         total: sale.total || 0,
         commissionAmount: sale.commissionAmount || 0,
         voided: Boolean(sale.voided),
+        shift: sale.shift === 'noche' ? 'Noche' : (sale.shift === 'dia' ? 'Día' : ''),
+        discount: sale.discount || 0,
+        tip: sale.tip || 0,
       };
     });
   }
@@ -550,6 +597,14 @@
     }
 
     const employeeId = pathname.match(/^\/api\/employees\/([^/]+)$/);
+    if (method === 'DELETE' && employeeId) {
+      const user = requireUser('gerente');
+      const employee = findEmployee(decodeURIComponent(employeeId[1]));
+      db.users = db.users.filter((item) => item.id !== employee.id);
+      save();
+      return payloadFor(user);
+    }
+
     if (method === 'PUT' && employeeId) {
       const user = requireUser('gerente');
       const employee = findEmployee(decodeURIComponent(employeeId[1]));
@@ -575,77 +630,62 @@
       if (employee.active === false) fail(400, 'Ese empleado está inactivo.');
       const carModel = cleanText(body.carModel, 80);
       if (!carModel) fail(400, 'Escribe el modelo del carro.');
-      const sectionId = String(body.sectionId || '');
-      let serviceName = 'Otros';
-      let catalogPrice = 0;
-      let description = '';
-      let rim = '';
-      let extraPatches = 0;
-      let extraValves = 0;
-      if (sectionId === 'otros') {
-        description = cleanText(body.description, 300);
-        if (!description) fail(400, 'Describe lo que se vendió.');
-        if (String(body.customPrice ?? '').trim() !== '') {
-          catalogPrice = cleanNumber(body.customPrice, { min: 0, label: 'El valor del trabajo' });
-        }
-      } else {
-        const catalog = normalizeCatalog(db.settings.catalog);
-        const section = catalog.sections.find((item) => item.id === sectionId);
-        if (!section) fail(400, 'Elige una sección.');
-        serviceName = section.name;
-        if (section.kind === 'rims') {
-          rim = String(body.rim || '');
-          const extraOption = (section.extras || []).find((item) => item.id === rim);
-          if (extraOption) {
-            catalogPrice = Number(extraOption.price) || 0;
-            serviceName = `${section.name} · ${extraOption.name}`;
-          } else if ((section.rims || []).includes(rim)) {
-            catalogPrice = Number(section.prices[rim]) || 0;
-            serviceName = `${section.name} · Rim ${rim}`;
-          } else fail(400, 'Elige el Rim.');
-        } else {
-          const item = (section.items || []).find((entry) => entry.id === String(body.itemId || ''));
-          if (!item) fail(400, 'Elige la llanta.');
-          catalogPrice = Number(item.price) || 0;
-          serviceName = `Venta de llanta · ${item.name}`;
-        }
-        if (!(catalogPrice > 0)) fail(400, 'Esa opción todavía no tiene precio.');
-      }
-      extraPatches = countExtra(body.extraPatches, 'Los parches');
-      extraValves = countExtra(body.extraValves, 'Las válvulas');
+      const shift = body.shift === 'noche' ? 'noche' : body.shift === 'dia' ? 'dia' : '';
+      if (!shift) fail(400, 'Elige el turno del día o de la noche.');
+      const incoming = Array.isArray(body.lines) && body.lines.length
+        ? body.lines
+        : [{ sectionId: body.sectionId, rim: body.rim, itemId: body.itemId, customPrice: body.customPrice, description: body.description }];
+      if (incoming.length > 8) fail(400, 'En un mismo carro se pueden anotar hasta 8 servicios.');
+      const catalog = normalizeCatalog(db.settings.catalog);
+      const resolved = incoming.map((line) => linePrice(catalog, line));
+      if (resolved.some((line) => line.sectionId !== 'otros' && !(line.price > 0))) fail(400, 'Esa opción todavía no tiene precio.');
+      const extraPatches = countExtra(body.extraPatches, 'Los parches');
+      const extraValves = countExtra(body.extraValves, 'Las válvulas');
       const bits = [];
       if (extraPatches > 0) bits.push(`${extraPatches} parche${extraPatches === 1 ? '' : 's'}`);
       if (extraValves > 0) bits.push(`${extraValves} válvula${extraValves === 1 ? '' : 's'}`);
-      catalogPrice = roundMoney(catalogPrice + extraPatches * PATCH_EXTRA + extraValves * VALVE_EXTRA);
-      if (bits.length) {
-        serviceName = `${serviceName} · ${bits.join(' · ')}`;
-        description = [description, bits.join(', ')].filter(Boolean).join('. ');
-      }
-      const methods = new Set(['yape', 'efectivo', 'transferencia']);
+      const subtotal = roundMoney(resolved.reduce((sum, line) => sum + line.price, 0) + extraPatches * PATCH_EXTRA + extraValves * VALVE_EXTRA);
+      const discount = String(body.discount ?? '').trim() === '' ? 0 : cleanNumber(body.discount, { min: 0, label: 'El descuento' });
+      if (discount - subtotal > 0.009) fail(400, 'El descuento no puede pasar el precio del servicio.');
+      const tip = String(body.tip ?? '').trim() === '' ? 0 : cleanNumber(body.tip, { min: 0, label: 'La propina' });
+      const charged = roundMoney(subtotal - discount);
+      const methods = new Set(['yappy', 'efectivo', 'transferencia']);
       const payments = Array.isArray(body.payments) ? body.payments : [];
-      if (payments.length < 1 || payments.length > 2) fail(400, 'Elige uno o dos métodos de pago.');
+      if (charged > 0 && (payments.length < 1 || payments.length > 2)) fail(400, 'Elige uno o dos métodos de pago.');
+      if (charged === 0 && payments.length > 2) fail(400, 'Elige uno o dos métodos de pago.');
       const cleanPayments = payments.map((item) => {
-        const methodName = String(item.method || '');
+        const methodName = payMethod(item.method);
         if (!methods.has(methodName)) fail(400, 'Ese método de pago no está disponible.');
         return { method: methodName, amount: cleanNumber(item.amount, { min: 0.01, label: 'El monto' }) };
       });
       if (new Set(cleanPayments.map((item) => item.method)).size !== cleanPayments.length) fail(400, 'No repitas el mismo método de pago.');
       const paid = roundMoney(cleanPayments.reduce((sum, item) => sum + item.amount, 0));
-      if (catalogPrice > 0 && Math.abs(paid - catalogPrice) > 0.009) fail(400, 'Los montos deben sumar el precio del servicio.');
-      const total = catalogPrice > 0 ? catalogPrice : paid;
+      if (charged > 0 && Math.abs(paid - charged) > 0.009) fail(400, 'Los montos deben sumar el precio del servicio, ya con el descuento.');
+      const total = charged;
       const payMode = employee.payMode === 'salario' ? 'salario' : 'porcentaje';
       const percent = payMode === 'salario' ? 0 : Number(employee.commissionPercent) || 0;
+      let serviceName = resolved.map((line) => line.title).join(' + ');
+      let description = resolved.map((line) => line.description).filter(Boolean).join('. ');
+      if (bits.length) {
+        serviceName = `${serviceName} · ${bits.join(' · ')}`;
+        description = [description, bits.join(', ')].filter(Boolean).join('. ');
+      }
+      description = [description, discount ? `Descuento ${discount}` : '', tip ? `Propina ${tip}` : ''].filter(Boolean).join('. ');
       const sale = {
         id: uid('ven'),
         employeeId: employee.id,
         employeeName: employee.name,
-        sectionId,
+        sectionId: resolved[0].sectionId,
+        lines: resolved.map((line) => ({ sectionId: line.sectionId, title: line.title, price: line.price, rim: line.rim })),
         serviceName,
-        rim,
+        rim: resolved.map((line) => line.rim).filter((item) => /^\d+$/.test(item)).join(', '),
         extraPatches,
         extraValves,
         description,
         carModel,
+        shift,
+        discount,
+        tip,
         payments: cleanPayments,
         productId: null,
         productName: serviceName,
